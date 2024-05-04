@@ -132,7 +132,7 @@ class ModelTraining(Lineage):
         existing_json_data = None
         if os.path.exists(fname):
             with open(fname, 'r') as f:
-                existing_json_data = json.load(f.read())
+                existing_json_data = json.loads(f.read())
 
         if existing_json_data is None:
             existing_json_data = dict()
