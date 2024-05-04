@@ -75,7 +75,7 @@ class DataGeneration(Lineage):
             fname = f'{self.lineage_id}_lineage.json'
 
         existing_json_data = None
-        if os.file.exist(fname):
+        if os.path.exists(fname):
             with open(fname, 'r') as f:
                 existing_json_data = json.load(fname)
 
@@ -126,7 +126,7 @@ class ModelTraining(Lineage):
             fname = f'{self.lineage_id}_lineage.json'
 
         existing_json_data = None
-        if os.file.exist(fname):
+        if os.path.exists(fname):
             with open(fname, 'r') as f:
                 existing_json_data = json.load(fname)
 
