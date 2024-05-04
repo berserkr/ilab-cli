@@ -70,6 +70,8 @@ class DataGeneration(Lineage):
         return json_data
     
     def save(self, fname=None):
+        
+        logger.info(f'Saving {self.to_json()}')
 
         if fname is None:
             fname = f'{self.lineage_id}_lineage.json'
@@ -77,7 +79,7 @@ class DataGeneration(Lineage):
         existing_json_data = None
         if os.path.exists(fname):
             with open(fname, 'r') as f:
-                existing_json_data = json.load(fname)
+                existing_json_data = json.load(f.read())
 
         if existing_json_data is None:
             existing_json_data = dict()
@@ -122,13 +124,15 @@ class ModelTraining(Lineage):
 
     def save(self, fname=None):
 
+        logger.info(f'Saving {self.to_json()}')
+
         if fname is None:
             fname = f'{self.lineage_id}_lineage.json'
 
         existing_json_data = None
         if os.path.exists(fname):
             with open(fname, 'r') as f:
-                existing_json_data = json.load(fname)
+                existing_json_data = json.load(f.read())
 
         if existing_json_data is None:
             existing_json_data = dict()
