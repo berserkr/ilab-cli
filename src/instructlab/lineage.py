@@ -163,7 +163,7 @@ def get_sha2(file_path):
 
 # files_with_hashes
 def get_files_with_sha2(files_path):
-    files = [f'{files_path}/{f}' for f in os.listdir(files_path) if os.path.isfile(f)]
+    files = [f'{files_path}/{f}' for f in os.listdir(files_path) if os.path.isfile(f'{files_path}/{f}')]
     tuples = []
     for file in files:
         sha256hash = get_sha2(file)

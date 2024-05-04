@@ -274,10 +274,10 @@ def linux_train(
     )
 
     print("LINUX_TRAIN.PY: TRAINING")
-    trainer.train()
+    train_output = trainer.train()
 
-    statistics = trainer.log_metrics()
-    print(f"LINUX_TRAIN.PY LOG METRICS: {statistics}")
+    statistics.append(train_output._asdict())
+    print(f"LINUX_TRAIN.PY LOG METRICS: {train_output}")
 
     model.config.use_cache = True
 
