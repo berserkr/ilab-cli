@@ -44,7 +44,7 @@ class DataGeneration(Lineage):
         self.generator_server = generator_server
         self.files_generated = files_generated
         self.num_instructions_to_generate = num_instructions_to_generate
-        self.time_stamp = datetime.now(timezone.utc)
+        self.time_stamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
         try:
             repo = Repo(taxonomy_path)
@@ -106,7 +106,7 @@ class ModelTraining(Lineage):
         self.trained_model = trained_model
         self.trained_model_files = trained_model_files
 
-        self.time_stamp = datetime.now(timezone.utc)
+        self.time_stamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         
     def to_json(self):
 
