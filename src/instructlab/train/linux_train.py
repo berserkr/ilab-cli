@@ -108,6 +108,7 @@ def linux_train(
     num_epochs: Optional[int] = None,
     device: torch.device = torch.device("cpu"),
     four_bit_quant: bool = False,
+    statistics: Optional[str] = None
 ):
     """Lab Train for Linux!"""
     print("LINUX_TRAIN.PY: NUM EPOCHS IS: ", num_epochs)
@@ -274,6 +275,9 @@ def linux_train(
 
     print("LINUX_TRAIN.PY: TRAINING")
     trainer.train()
+
+    statistics = trainer.log_metrics()
+    print(f"LINUX_TRAIN.PY LOG METRICS: {statistics}")
 
     model.config.use_cache = True
 

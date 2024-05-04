@@ -986,6 +986,8 @@ def train(
         from .llamacpp.llamacpp_convert_to_gguf import convert_llama_to_gguf
         from .train.linux_train import linux_train
 
+        statistics = []
+
         linux_train(
             train_file=train_files[0],
             test_file=test_files[0],
@@ -993,6 +995,7 @@ def train(
             num_epochs=num_epochs,
             device=device,
             four_bit_quant=four_bit_quant,
+            statistics=statistics
         )
 
         training_results_dir = "./training_results"
