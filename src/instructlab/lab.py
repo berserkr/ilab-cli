@@ -22,7 +22,7 @@ import yaml
 
 # Local
 # NOTE: Subcommands are using local imports to speed up startup time.
-from . import config, utils
+from . import config, utils, lineage
 
 # Set logging level of OpenAI client and httpx library to ERROR to suppress INFO messages
 logging.getLogger("openai").setLevel(logging.ERROR)
@@ -333,6 +333,12 @@ def serve(ctx, model_path, gpu_layers, num_threads, max_ctx_size, model_family):
 
 @cli.command()
 @click.option(
+    "--lineage-id",
+    default=config.DEFAULT_LINEAGE_ID,
+    show_default=True,
+    help="Lineage ID as a string",
+)
+@click.option(
     "--model",
     default=config.DEFAULT_MODEL,
     show_default=True,
@@ -447,6 +453,7 @@ def serve(ctx, model_path, gpu_layers, num_threads, max_ctx_size, model_family):
 @click.pass_context
 def generate(
     ctx,
+    lineage_id,
     model,
     num_cpus,
     num_instructions,
@@ -464,7 +471,7 @@ def generate(
     tls_client_cert,
     tls_client_key,
     tls_client_passwd,
-    model_family,
+    model_family
 ):
     """Generates synthetic data to enhance your example data"""
     # pylint: disable=C0415
@@ -534,6 +541,23 @@ def generate(
         if server_process:
             server_process.terminate()
             server_process.join(timeout=30)
+
+        
+        # get all generated files in output dir...
+        generated_files = lineage.get_files_with_sha2(output_dir)
+
+        # assume we finished... let's add lineage for it...
+        _lineage = lineage.DataGeneration(
+            lineage_id=lineage_id,
+            taxonomy_path=taxonomy_path,
+            taxonomy_tree_path=taxonomy_base,
+            num_instructions_to_generate=num_instructions,
+            files_generated=generated_files,
+            generator_server=api_base,
+            synthetic_data_generator=model
+        )
+
+        _lineage.save()
 
 
 @cli.command()
@@ -803,6 +827,12 @@ TORCH_DEVICE = TorchDeviceParam()
 
 
 @cli.command()
+@click.option(
+    "--lineage-id",
+    default=config.DEFAULT_LINEAGE_ID,
+    show_default=True,
+    help="Pipeline UUID as a string",
+)
 @click.option("--data-dir", help="Base directory where data is stored.", default=None)
 @click.option(
     "--input-dir",
@@ -884,6 +914,7 @@ TORCH_DEVICE = TorchDeviceParam()
 @click.pass_context
 def train(
     ctx,
+    lineage_id,
     data_dir,
     input_dir,
     skip_preprocessing,
@@ -1075,6 +1106,8 @@ def train(
         adapter_file_path = f"{dest_model_dir}/adapters.npz"
         # train the model with LoRA
 
+        statistics = []
+
         load_and_train(
             model=dest_model_dir,
             train=True,
@@ -1083,10 +1116,24 @@ def train(
             iters=iters,
             save_every=10,
             steps_per_eval=10,
+            statistics=statistics
         )
 
         # TODO copy some downloaded files from the PyTorch model folder
         # Seems to be not a problem if working with a remote download with convert.py
+
+        # finally... let us save lineage data....
+        _lineage = lineage.ModelTraining(
+            lineage_id=lineage_id,
+            num_epochs=num_epochs,
+            train_data=train_files[0],
+            test_data=test_files[0],
+            statistics=statistics,
+            trained_model=final_results_dir + "/ggml-model-f16.gguf",
+            trained_model_files=lineage.get_files_with_sha2(final_results_dir)
+        )
+
+        _lineage.save()
 
 
 @cli.command()

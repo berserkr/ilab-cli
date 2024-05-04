@@ -144,6 +144,7 @@ def train_model(
     val_batches,
     save_every,
     adapter_file,
+    statistics=None
 ):
     # Create value and grad function for loss
     loss_value_and_grad = nn.value_and_grad(model, loss)
@@ -173,14 +174,19 @@ def train_model(
             train_loss = np.mean(losses)
 
             stop = time.perf_counter()
-            print(
+            stats = (
                 f"Iter {it+1:03d}: Train loss {train_loss:.3f}, "
                 f"It/sec {steps_per_report / (stop - start):.3f}, "
                 f"Tokens/sec {float(n_tokens) / (stop - start):.3f}"
             )
+            print(stats)
+            statistics.append(stats)
+
             losses = []
             n_tokens = 0
             start = time.perf_counter()
+
+
 
         # Report validation loss if needed
         if it == 0 or (it + 1) % steps_per_eval == 0:
@@ -189,12 +195,16 @@ def train_model(
                 model, val_set, loss, tokenizer, batch_size, val_batches
             )
             epoch = (it * batch_size) // len(train_set)
-            print(
+
+            stats = (
                 f"Epoch {epoch + 1}: "
                 f"Iter {it + 1}: "
                 f"Val loss {val_loss:.3f}, "
                 f"Val took {(time.perf_counter() - stop):.3f}s"
             )
+
+            print(stats)
+            statistics.append(stats)
 
             start = time.perf_counter()
 
@@ -261,6 +271,7 @@ def load_and_train(
     no_adapter: bool = False,
     test_batches: int = 500,
     seed: int = 0,
+    statistics: Optional[str] = None
 ):
     """LoRA or QLoRA fine tuning."""
     np.random.seed(seed)
@@ -313,6 +324,7 @@ def load_and_train(
             val_batches,
             save_every,
             adapter_file,
+            statistics=statistics
         )
 
         # Save adapter weights
