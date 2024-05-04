@@ -531,18 +531,9 @@ def generate(
             tls_client_key=tls_client_key,
             tls_client_passwd=tls_client_passwd,
         )
-    except GenerateException as exc:
-        click.secho(
-            f"Generating dataset failed with the following error: {exc}",
-            fg="red",
-        )
-        raise click.exceptions.Exit(1)
-    finally:
-        if server_process:
-            server_process.terminate()
-            server_process.join(timeout=30)
 
-        
+        # if all went well, let us generate lineage data...
+
         # get all generated files in output dir...
         generated_files = lineage.get_files_with_sha2(output_dir)
 
@@ -558,6 +549,17 @@ def generate(
         )
 
         _lineage.save()
+
+    except GenerateException as exc:
+        click.secho(
+            f"Generating dataset failed with the following error: {exc}",
+            fg="red",
+        )
+        raise click.exceptions.Exit(1)
+    finally:
+        if server_process:
+            server_process.terminate()
+            server_process.join(timeout=30)
 
 
 @cli.command()
@@ -1122,18 +1124,19 @@ def train(
         # TODO copy some downloaded files from the PyTorch model folder
         # Seems to be not a problem if working with a remote download with convert.py
 
-        # finally... let us save lineage data....
-        _lineage = lineage.ModelTraining(
-            lineage_id=lineage_id,
-            num_epochs=num_epochs,
-            train_data=train_files[0],
-            test_data=test_files[0],
-            statistics=statistics,
-            trained_model=final_results_dir + "/ggml-model-f16.gguf",
-            trained_model_files=lineage.get_files_with_sha2(final_results_dir)
-        )
+    # finally... let us save lineage data....
+    # only if we were successful...
+    _lineage = lineage.ModelTraining(
+        lineage_id=lineage_id,
+        num_epochs=num_epochs,
+        train_data=train_files[0],
+        test_data=test_files[0],
+        statistics=statistics,
+        trained_model=final_results_dir + "/ggml-model-f16.gguf",
+        trained_model_files=lineage.get_files_with_sha2(final_results_dir)
+    )
 
-        _lineage.save()
+    _lineage.save()
 
 
 @cli.command()
