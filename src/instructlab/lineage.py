@@ -48,7 +48,7 @@ class DataGeneration(Lineage):
 
         try:
             repo = Repo(taxonomy_path)
-            self.taxonomy_repo = repo.remote().urls
+            self.taxonomy_repo = next(repo.remote().urls)
 
         except ValueError as ve:
             logger.error(f'Could not get logging due to {str(ve)}')
