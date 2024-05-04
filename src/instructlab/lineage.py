@@ -82,7 +82,7 @@ class DataGeneration(Lineage):
         if existing_json_data is None:
             existing_json_data = dict()
 
-        existing_json_data.append(self.to_json())
+        existing_json_data[self.event_type] = self.to_json()
 
         with open(fname, 'w') as f:
             json.dump(existing_json_data, f)        
@@ -133,7 +133,7 @@ class ModelTraining(Lineage):
         if existing_json_data is None:
             existing_json_data = dict()
 
-        existing_json_data.append(self.to_json())
+        existing_json_data[self.event_type] = self.to_json()
 
         with open(fname, 'w') as f:
             json.dump(existing_json_data, f)    
