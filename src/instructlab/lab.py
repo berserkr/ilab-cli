@@ -1134,6 +1134,7 @@ def train(
         num_epochs=num_epochs,
         train_data=train_files[0],
         test_data=test_files[0],
+        base_model=model_name,
         statistics=statistics,
         trained_model=final_results_dir + "/ggml-model-f16.gguf",
         trained_model_files=lineage.get_files_with_sha2(final_results_dir)

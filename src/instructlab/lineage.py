@@ -94,7 +94,7 @@ class ModelTraining(Lineage):
     """Model training class"""
     def __init__(
             self, lineage_id, num_epochs,
-            train_data, test_data, statistics, 
+            train_data, test_data, statistics, base_model, 
             trained_model, trained_model_files
             ) -> None:
         super().__init__(lineage_id, event_type="model_train")
@@ -102,6 +102,7 @@ class ModelTraining(Lineage):
         self.num_epochs = num_epochs
         self.train_data = train_data
         self.test_data = test_data
+        self.base_model = base_model
         self.statistics = statistics
         self.trained_model = trained_model
         self.trained_model_files = trained_model_files
@@ -116,6 +117,7 @@ class ModelTraining(Lineage):
         json_data['num_epochs'] = self.num_epochs
         json_data['train_data'] = self.train_data
         json_data['test_data'] = self.test_data
+        json_data['base_model'] = self.base_model
         json_data['statistics'] = self.statistics
         json_data['trained_model'] = self.trained_model
         json_data['trained_model_files'] = self.trained_model_files
