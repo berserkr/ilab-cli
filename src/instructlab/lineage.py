@@ -10,7 +10,7 @@ BUCKET='lh-test'
 BASE_PATH='exp1'
 s3 = boto3.client(
     's3',
-    region_name='us-east-1',
+    region_name='us-east',
     aws_access_key_id=os.environ['KEY_ID'],
     aws_secret_access_key=os.environ['ACCESS_KEY']
 )
@@ -89,7 +89,7 @@ class DataGeneration(Lineage):
         else:
             try:
                 s3.download_file(BUCKET, f'{BASE_PATH}/{fname}', fname)
-                
+
             except Exception as e:
                 logger.warning(f'Could not fetch {fname} from cos due to {str(e)}')
 
