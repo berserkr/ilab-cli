@@ -6,7 +6,8 @@ import logging
 import boto3
 
 
-BUCKET='lh-test/exp1'
+BUCKET='lh-test'
+BASE_PATH='exp1'
 s3 = boto3.client(
     's3',
     region_name='us-east-1',
@@ -87,7 +88,7 @@ class DataGeneration(Lineage):
             fname = f'{self.lineage_id}_lineage.json'
         else:
             try:
-                s3.download_file(BUCKET, fname, fname)
+                s3.download_file(BUCKET, f'{BASE_PATH}/{fname}', fname)
             except Exception as e:
                 logger.warning(f'Could not fetch {fname} from cos due to {str(e)}')
 
@@ -106,7 +107,7 @@ class DataGeneration(Lineage):
             json.dump(existing_json_data, f) 
 
             try:
-                s3.upload_file(fname, BUCKET, fname)
+                s3.upload_file(fname, BUCKET, f'{BASE_PATH}/{fname}')
 
             except Exception as e:
                 logger.warning(f'Could not save {fname} in cos due to {str(e)}')   
@@ -154,7 +155,8 @@ class ModelTraining(Lineage):
             fname = f'{self.lineage_id}_lineage.json'
         else:
             try:
-                s3.download_file(BUCKET, fname, fname)
+                s3.download_file(BUCKET, f'{BASE_PATH}/{fname}', fname)
+
             except Exception as e:
                 logger.warning(f'Could not fetch {fname} from cos due to {str(e)}')
 
@@ -172,7 +174,7 @@ class ModelTraining(Lineage):
             json.dump(existing_json_data, f)
 
             try:
-                s3.upload_file(fname, BUCKET, fname)
+                s3.upload_file(f'{BASE_PATH}/{fname}', BUCKET, fname)
 
             except Exception as e:
                 logger.warning(f'Could not save {fname} in cos due to {str(e)}')   
