@@ -7,7 +7,7 @@ import boto3
 
 
 BUCKET='lh-test/exp1'
-s3 = boto3.resource(
+s3 = boto3.client(
     's3',
     region_name='us-east-1',
     aws_access_key_id=os.environ['KEY_ID'],
@@ -170,7 +170,7 @@ class ModelTraining(Lineage):
 
         with open(fname, 'w') as f:
             json.dump(existing_json_data, f)
-            
+
             try:
                 s3.upload_file(fname, BUCKET, fname)
 
