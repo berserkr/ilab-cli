@@ -3,6 +3,16 @@ from datetime import datetime, timezone
 import os
 from git import Repo
 import logging
+import boto3
+
+
+BUCKET='lh-test/exp1'
+s3 = boto3.resource(
+    's3',
+    region_name='us-east-1',
+    aws_access_key_id=os.environ['KEY_ID'],
+    aws_secret_access_key=os.environ['ACCESS_KEY']
+)
 
 
 # define basic logger
@@ -75,6 +85,12 @@ class DataGeneration(Lineage):
 
         if fname is None:
             fname = f'{self.lineage_id}_lineage.json'
+        else:
+            try:
+                s3.download_file(BUCKET, fname, fname)
+            except Exception as e:
+                logger.warning(f'Could not fetch {fname} from cos due to {str(e)}')
+
 
         existing_json_data = None
         if os.path.exists(fname):
@@ -87,7 +103,13 @@ class DataGeneration(Lineage):
         existing_json_data[self.event_type] = self.to_json()
 
         with open(fname, 'w') as f:
-            json.dump(existing_json_data, f)        
+            json.dump(existing_json_data, f) 
+
+            try:
+                s3.upload_file(fname, BUCKET, fname)
+
+            except Exception as e:
+                logger.warning(f'Could not save {fname} in cos due to {str(e)}')   
 
 
 class ModelTraining(Lineage):
@@ -130,6 +152,11 @@ class ModelTraining(Lineage):
 
         if fname is None:
             fname = f'{self.lineage_id}_lineage.json'
+        else:
+            try:
+                s3.download_file(BUCKET, fname, fname)
+            except Exception as e:
+                logger.warning(f'Could not fetch {fname} from cos due to {str(e)}')
 
         existing_json_data = None
         if os.path.exists(fname):
@@ -142,7 +169,13 @@ class ModelTraining(Lineage):
         existing_json_data[self.event_type] = self.to_json()
 
         with open(fname, 'w') as f:
-            json.dump(existing_json_data, f)    
+            json.dump(existing_json_data, f)
+            
+            try:
+                s3.upload_file(fname, BUCKET, fname)
+
+            except Exception as e:
+                logger.warning(f'Could not save {fname} in cos due to {str(e)}')   
 
 def get_sha2(file_path):
     import hashlib
