@@ -89,6 +89,7 @@ class DataGeneration(Lineage):
         else:
             try:
                 s3.download_file(BUCKET, f'{BASE_PATH}/{fname}', fname)
+                
             except Exception as e:
                 logger.warning(f'Could not fetch {fname} from cos due to {str(e)}')
 
@@ -174,7 +175,7 @@ class ModelTraining(Lineage):
             json.dump(existing_json_data, f)
 
             try:
-                s3.upload_file(f'{BASE_PATH}/{fname}', BUCKET, fname)
+                s3.upload_file(fname, BUCKET, f'{BASE_PATH}/{fname}')
 
             except Exception as e:
                 logger.warning(f'Could not save {fname} in cos due to {str(e)}')   
