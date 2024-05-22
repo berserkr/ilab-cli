@@ -12,7 +12,8 @@ s3 = boto3.client(
     's3',
     region_name='us-east',
     aws_access_key_id=os.environ['KEY_ID'],
-    aws_secret_access_key=os.environ['ACCESS_KEY']
+    aws_secret_access_key=os.environ['ACCESS_KEY'],
+    endpoint_url=os.environ['ENDPOINT_URL']
 )
 
 
