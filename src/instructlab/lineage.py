@@ -55,16 +55,13 @@ class JobStatsUtil:
         
         else:
             # Check if generate_data_dict key exists
-            if "generate_data" in data:
-                self.generate_data = data["generate_data"]
-                # print(self.generate_data)
-            else:
-                logging.warning("Warning: No generate_data was found!")
+            if "event_type" in data and data["event_type"] == "generate_data":
+                self.generate_data = data
 
             # Check if model_train key exists
-            if "model_train" in data:
-                self.model_train = data["model_train"]
-                # print(self.model_train)
+            elif "event_type" in data and data["event_type"] == "model_train":
+                self.model_train = data
+
             else:
                 logging.warning("Warning: No model_train was found!")
         
