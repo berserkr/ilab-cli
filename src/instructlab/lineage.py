@@ -3,22 +3,276 @@ from datetime import datetime, timezone
 import os
 from git import Repo
 import logging
-import boto3
+import json
+
+from lakehouse import LakehouseIceberg
+from lakehouse.api import ConfigMap
+from lakehouse.api import JobStats, Datasource, JobDetails
+from lakehouse.assets.table import Table
 
 
-BUCKET='lh-test'
-BASE_PATH='exp1'
-s3 = boto3.client(
-    's3',
-    region_name='us-east',
-    aws_access_key_id=os.environ['KEY_ID'],
-    aws_secret_access_key=os.environ['ACCESS_KEY'],
-    endpoint_url=os.environ['ENDPOINT_URL']
-)
+# get lakehouse token from env...
+LAKEHOUSE_TOKEN=os.environ.get('LAKEHOUSE_TOKEN')
+
+
+if os.environ.get('LAKEHOUSE_ENV'):
+    LAKEHOUSE_ENV = os.environ.get('LAKEHOUSE_ENV')
+else:
+    LAKEHOUSE_ENV = 'STAGING'
 
 
 # define basic logger
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+
+class JobStatsUtil:
+    def __init__(self):
+        # Init the Stats class and do config setup
+        self.lh = None
+        # self.config_path = config_path
+        self.generate_data = {}
+        self.model_train = {}
+
+        # LH Setup
+        self.setup_lakehouse()
+
+    def setup_lakehouse(self):
+        try:
+            self.lh = LakehouseIceberg(
+                config='map', 
+                conf_map=ConfigMap(
+                    environment=LAKEHOUSE_ENV, 
+                    token=LAKEHOUSE_TOKEN))
+        except:
+            logging.warning("There was a problem setting up Lakehouse")
+
+    def parse_events_json(self, data):
+
+        # Check if empty
+        if len(data) == 0:
+            return False
+        
+        else:
+            # Check if generate_data_dict key exists
+            if "generate_data" in data:
+                self.generate_data = data["generate_data"]
+                # print(self.generate_data)
+            else:
+                logging.warning("Warning: No generate_data was found!")
+
+            # Check if model_train key exists
+            if "model_train" in data:
+                self.model_train = data["model_train"]
+                # print(self.model_train)
+            else:
+                logging.warning("Warning: No model_train was found!")
+        
+        return True
+
+    def check_data_integrity(self, required_keys, data):
+        # Bare minimum To fill out the JobStats
+        if required_keys and all(k in data for k in required_keys):
+            logging.info("Found minimum number of keys.")
+            return True
+        
+        return False
+
+    def post_generate_data_jobstats(self, required_keys):
+        """
+        Pushes the Generate Data part of the events.json to dmf JobStats
+        :param generate_data_dict: The Generate Data part of the events json
+        :return: Bool
+        """
+        if self.check_data_integrity(required_keys, self.generate_data):
+            # Check the number of files_generated and push them to the table before we can proceed to push the data stat
+            # @ToDo: We have to get the number of file generated and push then to the appropriate table or COS location
+            #  and get the reference and then populate the targets
+            # Try to save the JobStat
+            try:
+                stats = JobStats(
+                    release_id=self.generate_data["lineage_id"],
+                    job_details=JobDetails(
+                        id='generate_data_' + self.generate_data["lineage_id"],
+                        name='ilab-generate-data-job',
+                        type='ilab',
+                        category='finetuning',
+                        started_at=self.generate_data["time_stamp"],
+                        completed_at=self.generate_data["time_stamp"],
+                        status='success',
+                        owner='iLab'  # OPT
+                    ),
+                    sources=[Datasource(
+                        name=self.generate_data["taxonomy_repo"],
+                        type='dataset',
+                        table='tbd',
+                        snapshot_id='123456',  # OPT
+                        path=[self.generate_data["taxonomy_path"]],  # OPT
+                        version='rel_07',  # OPT
+                        extra={"synthetic_data_generator": self.generate_data["synthetic_data_generator"],
+                               "taxonomy_tree_path": self.generate_data["taxonomy_tree_path"],
+                               "generator_server": self.generate_data["generator_server"],
+                               "num_instructions_to_generate": self.generate_data["num_instructions_to_generate"]
+                               }
+                    )],
+                    # @ToDo This will get populated after the "files_generated" are processed
+                    targets=[Datasource(
+                        name='pushshift',
+                        type='dataset',
+                        table='bluepile.enterprise.dedup',
+                        snapshot_id='987632',
+                        version='rel_07'  # OPT
+                    )],
+                    job_input_params={  # OPT
+                    },
+                    execution_stats={  # OPT
+                    },
+                    job_output_stats={  # OPT
+                    }
+                )
+                self.lh.save_stats(stats)
+                logging.info("Successfully added generate_data jobStat")
+                return True
+                
+            except Exception as e:
+                logging.error(e)
+                
+        return False
+
+    def get_generate_data_jobstats(self):
+
+        ### Ray Example
+        # table = lh.load_table("dmf.job_stats")
+        # print(table)
+        # # run a query
+        # scan = table.scan()
+        # ds = data.from_arrow(scan.to_arrow())
+        # ds.show()
+        try:
+            ### DuckDB example
+            table = self.lh.load_table("dmf.job_stats")
+            # run a query
+            con = table.scan(limit=10).to_duckdb("job_stats")
+            # execute SQL statements on the data in duckdb table named 'internet'
+            release_id = self.generate_data["lineage_id"]
+            res = con.execute(
+                "select * from job_stats where release_id == '" + release_id + "' AND job_name like '%generate-data%'").df()
+
+            cols = []
+            for col in res:
+                cols.append(col)
+
+            json_docs = []
+            for i in range(len(res)):
+                json_doc = dict()
+                
+                for j in range(0, len(cols)):
+                    json_doc[cols[j]] = res.loc[i, cols[j]]
+                    
+                json_docs.append(json_doc)
+
+            return json_docs
+
+        except Exception as e:
+            logging.error(e)
+
+        return None
+
+    def post_model_train_jobstats(self, required_keys):
+        """
+        Pushes the Generate Data part of the events.json to dmf JobStats
+        :param generate_data_dict: The Generate Data part of the events json
+        :return: Bool
+        """
+        if self.check_data_integrity(required_keys, self.model_train):
+            # Check the number of files_generated and push them to the table before we can proceed to push the data stat
+            # @ToDo: We have to get the number of file generated and push then to the appropriate table or COS location
+            #  and get the reference and then populate the targets
+            # Try to save the JobStat
+            try:
+                stats = JobStats(
+                    release_id=self.model_train["lineage_id"],
+                    job_details=JobDetails(
+                        id='model_train_' + self.model_train["lineage_id"],
+                        name='ilab-model-train-job',
+                        type='ilab',
+                        category='finetuning',
+                        started_at=self.generate_data["time_stamp"],  # train_model does not have any time stamp
+                        completed_at=self.generate_data["time_stamp"],
+                        status='success',
+                        owner='iLab'  # OPT
+                    ),
+                    # @ToDo This will get populated after the retrieval of "files_generated" are processed
+                    sources=[Datasource(
+                        name="reference_from_files_generated_name",
+                        type='dataset',
+                        table='tbd',
+                        snapshot_id='123456',  # OPT
+                        path=["reference_from_files_generated_path"],  # OPT
+                        version='rel_07',  # OPT
+                    )],
+                    # @ToDo: Create a list of all the trained_model_files decide if its COS or table
+                    targets=[Datasource(
+                        name='pushshift',
+                        type='dataset',
+                        table='bluepile.enterprise.dedup',
+                        snapshot_id='987632',
+                        version='rel_07'  # OPT
+                    )],
+                    job_input_params={  # OPT
+                    },
+                    execution_stats={  # OPT
+                    },
+                    job_output_stats={  # OPT
+                    }
+                )
+                self.lh.save_stats(stats)
+                logging.info("Successfully added model_train jobStat")
+                return True
+
+            except Exception as e:
+                logging.error("Model Train", e)
+                
+        return False
+
+    def get_model_train_jobstats(self):
+
+        try:
+
+            release_id = self.model_train["lineage_id"]
+            partial_job_name = 'ilab-model-train-job'
+            
+            ### DuckDB example
+            #table = self.lh.load_table("dmf.job_stats")
+            # run a query
+            #con = table.scan(limit=10).to_duckdb("job_stats")
+            # execute SQL statements on the data in duckdb table named 'internet'
+            # release_id = self.generate_data["lineage_id"]
+            #query =f"select * from job_stats where release_id = '{release_id}' AND job_name like '%{partial_job_name}%'"
+            #res = con.execute(query).df()
+
+            t = Table(lh=self.lh, namespace='dmf', table_name='job_stats')
+            res = t.to_pandas(rows=10, row_filter=f"release_id = '{release_id}' and job_name like '{partial_job_name}%'")
+
+            cols = []
+            for col in res:
+                cols.append(col)
+
+            json_docs = []
+            for i in range(len(res)):
+                json_doc = dict()
+                
+                for j in range(0, len(cols)):
+                    json_doc[cols[j]] = res.loc[i, cols[j]]
+                    
+                json_docs.append(json_doc)
+
+            return json_docs
+            
+        except Exception as e:
+            logging.error(e)
+
+        return None
 
 
 class Lineage:
@@ -26,6 +280,7 @@ class Lineage:
     def __init__(self, lineage_id, event_type) -> None:
         self.lineage_id = lineage_id
         self.event_type = event_type
+        self.jutil = JobStatsUtil()
 
     def to_json(self):
         json_data = dict()
@@ -85,34 +340,18 @@ class DataGeneration(Lineage):
         
         logger.info(f'Saving {self.to_json()}')
 
-        if fname is None:
-            fname = f'{self.lineage_id}_lineage.json'
+        # save to local file if desired...
+        if fname:
+            with open(fname, 'w') as f:
+                json.dump(self.to_json(), f) 
+
+        # push to dmf via lineage APIs
+        required_keys = ["lineage_id", "event_type", "time_stamp", "taxonomy_repo", "files_generated"]
+
+        if self.jutil.parse_events_json(self.to_json()) and self.jutil.post_generate_data_jobstats(required_keys):
+            logger.info(f'DMF lineage saved successfully!')
         else:
-            try:
-                s3.download_file(BUCKET, f'{BASE_PATH}/{fname}', fname)
-
-            except Exception as e:
-                logger.warning(f'Could not fetch {fname} from cos due to {str(e)}')
-
-
-        existing_json_data = None
-        if os.path.exists(fname):
-            with open(fname, 'r') as f:
-                existing_json_data = json.load(f)
-
-        if existing_json_data is None:
-            existing_json_data = dict()
-
-        existing_json_data[self.event_type] = self.to_json()
-
-        with open(fname, 'w') as f:
-            json.dump(existing_json_data, f) 
-
-            try:
-                s3.upload_file(fname, BUCKET, f'{BASE_PATH}/{fname}')
-
-            except Exception as e:
-                logger.warning(f'Could not save {fname} in cos due to {str(e)}')   
+            logger.warning(f'Could not save DMF lineage. JSON obj : {self.to_json()}')
 
 
 class ModelTraining(Lineage):
@@ -153,33 +392,17 @@ class ModelTraining(Lineage):
 
         logger.info(f'Saving {self.to_json()}')
 
-        if fname is None:
-            fname = f'{self.lineage_id}_lineage.json'
+        # save to local file if desired...
+        if fname:
+            with open(fname, 'w') as f:
+                json.dump(self.to_json(), f)
+
+        # push to dmf via lineage APIs
+        required_keys = ["lineage_id", "event_type", "trained_model", "trained_model_files"]
+        if self.jutil.parse_events_json(self.to_json()) and self.post_model_train_jobstats(required_keys):
+            logger.info(f'DMF lineage saved successfully!')
         else:
-            try:
-                s3.download_file(BUCKET, f'{BASE_PATH}/{fname}', fname)
-
-            except Exception as e:
-                logger.warning(f'Could not fetch {fname} from cos due to {str(e)}')
-
-        existing_json_data = None
-        if os.path.exists(fname):
-            with open(fname, 'r') as f:
-                existing_json_data = json.load(f)
-
-        if existing_json_data is None:
-            existing_json_data = dict()
-
-        existing_json_data[self.event_type] = self.to_json()
-
-        with open(fname, 'w') as f:
-            json.dump(existing_json_data, f)
-
-            try:
-                s3.upload_file(fname, BUCKET, f'{BASE_PATH}/{fname}')
-
-            except Exception as e:
-                logger.warning(f'Could not save {fname} in cos due to {str(e)}')   
+            logger.warning(f'Could not save DMF lineage. JSON obj : {self.to_json()}')
 
 def get_sha2(file_path):
     import hashlib
