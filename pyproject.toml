@@ -28,7 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
-dynamic = ["dependencies", "version"]
+dynamic = ["dependencies", "optional-dependencies", "version"]
 
 [project.scripts]
 # defines ilab executable
@@ -41,6 +41,8 @@ issues = "https://github.com/instructlab/instructlab/issues"
 
 [tool.setuptools_scm]
 version_file = "src/instructlab/_version.py"
+# do not include +gREV local version, required for Test PyPI upload
+local_scheme = "no-local-version"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -53,7 +55,6 @@ where = ["src"]
 include = ["instructlab", "instructlab.chat", "instructlab.generator", "instructlab.train", "instructlab.train.lora_mlx", "instructlab.train.lora_mlx.models", "instructlab.llamacpp", "instructlab.mlx_explore", "instructlab.schema.v1", "instructlab.schema.v2"]
 
 [tool.setuptools.package-data]
-"instructlab.llamacpp" = ["quantize"]
 "instructlab.schema.v1" = ["*.json"]
 "instructlab.schema.v2" = ["*.json"]
 
@@ -83,11 +84,16 @@ select = [
     # "I",  # isort
     # "UP",  # pyupgrade
     # "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
 ]
 ignore = [
     # some embedded strings are longer than 88 characters
     "E501",  # line too long
+    "TID252",  # Prefer absolute imports over relative imports from parent modules
 ]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"yamllint".msg = "yamllint is for CLI usage only."
 
 [tool.ruff.lint.isort]
 # same as .isort.cfg

@@ -20,7 +20,7 @@ import click
 import tqdm
 
 # Local
-from ..config import DEFAULT_MULTIPROCESSING_START_METHOD
+from ..config import DEFAULT_MULTIPROCESSING_START_METHOD, get_model_family
 from ..utils import chunk_document, read_taxonomy
 from . import utils
 from .utils import GenerateException
@@ -449,7 +449,9 @@ def generate_data(
         scorer._tokenizer.tokenize(inst) for inst in all_instructions
     ]
 
-    prompt_template = check_prompt_file(prompt_file_path, model_family)
+    prompt_template = check_prompt_file(
+        prompt_file_path, get_model_family(model_family, model_name)
+    )
     if console_output:
         print(
             "Synthesizing new instructions. If you aren't satisfied with the generated instructions, interrupt training (Ctrl-C) and try adjusting your YAML files. Adding more examples may help."
@@ -499,11 +501,12 @@ def generate_data(
             new_instruction_tokens = scorer._tokenizer.tokenize(
                 instruction_data_entry["instruction"]
             )
-            with mpctx.Pool(num_cpus) as p:
-                rouge_scores = p.map(
+            with mpctx.Pool(num_cpus) as pool:
+                rouge_scores = pool.map(
                     partial(rouge_scorer._score_lcs, new_instruction_tokens),
                     all_instruction_tokens,
                 )
+            pool.join()
             instruction_data_entry["taxonomy_path"] = selected_taxonomy
             rouge_scores = [score.fmeasure for score in rouge_scores]
             # Comment out extra info not currently being used:
@@ -557,6 +560,8 @@ def generate_data(
             for entry in test_data:
                 json.dump(entry, outfile, ensure_ascii=False)
                 outfile.write("\n")
+
+    progress_bar.close()
 
     if total_discarded or total_rouged:
         logger.info(

@@ -7,6 +7,7 @@ from glob import glob
 from os.path import basename, dirname, exists, splitext
 import json
 import logging
+import multiprocessing
 import os
 import shutil
 import sys
@@ -17,12 +18,20 @@ from click_didyoumean import DYMGroup
 from git import GitError, Repo
 from huggingface_hub import hf_hub_download, list_repo_files
 from huggingface_hub import logging as hf_logging
+from huggingface_hub import snapshot_download
 import click
 import yaml
 
 # Local
 # NOTE: Subcommands are using local imports to speed up startup time.
-from . import config, utils, lineage
+from . import config, log, utils, lineage
+from .sysinfo import get_sysinfo
+
+# 'fork' is unsafe and incompatible with some hardware accelerators.
+# Python 3.14 will switch to 'spawn' on all platforms.
+multiprocessing.set_start_method(
+    config.DEFAULT_MULTIPROCESSING_START_METHOD, force=True
+)
 
 # Set logging level of OpenAI client and httpx library to ERROR to suppress INFO messages
 logging.getLogger("openai").setLevel(logging.ERROR)
@@ -36,54 +45,68 @@ if typing.TYPE_CHECKING:
 class Lab:
     """Lab object holds high-level information about ilab CLI"""
 
-    def __init__(self, filename):
-        self.config_file = filename
-        self.config = config.read_config(filename)
-        FORMAT = "%(levelname)s %(asctime)s %(filename)s:%(lineno)d %(message)s"
-        logging.basicConfig(format=FORMAT)
+    def __init__(self, config_obj: config.Config):
+        self.config = config_obj
+
+        # Set up logging for the Lab class
         self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(self.config.general.log_level.upper())
 
+        # Create a formatter
+        formatter = log.CustomFormatter(log.FORMAT)
 
-# pylint: disable=unused-argument
-def configure(ctx, param, filename):
-    """Configure is responsible for reading the config file, initiating Lab object and CLI context."""
-    # skip configuration reading when invoked command is `init`
-    if len(sys.argv) > 0 and sys.argv[1] in ("init", "--help"):
-        return
+        # Create a handler and set the formatter
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
 
-    if not exists(filename):
-        raise click.ClickException(
-            f"`{filename}` does not exists, please run `ilab init` or point to a valid configuration file using `--config=<path>`."
+        logging.basicConfig(
+            format=log.FORMAT,
+            handlers=[handler],
         )
 
-    try:
-        ctx.obj = Lab(filename)
-    except config.ConfigException as ex:
-        raise click.ClickException(str(ex))
-
-    # default_map holds a dictionary with default values for each command parameters
-    ctx.default_map = config.get_dict(ctx.obj.config)
+        self.logger.setLevel(self.config.general.log_level.upper())
 
 
 @click.group(cls=DYMGroup)
 @click.option(
     "--config",
+    "config_file",
     type=click.Path(),
     default=config.DEFAULT_CONFIG,
     show_default=True,
-    callback=configure,
-    is_eager=True,
     help="Path to a configuration file.",
 )
 @click.version_option(package_name="instructlab")
 @click.pass_context
 # pylint: disable=redefined-outer-name
-def cli(ctx, config):
+def cli(ctx, config_file):
     """CLI for interacting with InstructLab.
 
     If this is your first time running InstructLab, it's best to start with `ilab init` to create the environment.
     """
+    # ilab init or "--help" have no config file. ilab sysinfo does not need one.
+    # CliRunner does fill ctx.invoke_subcommand in option callbacks. We have
+    # to validate config_file here.
+    if (
+        ctx.invoked_subcommand not in {"init", "sysinfo"}
+        and "--help" not in sys.argv[1:]
+    ):
+        if config_file == "DEFAULT":
+            config_obj = config.get_default_config()
+        elif not os.path.isfile(config_file):
+            config_obj = None
+            ctx.fail(
+                f"`{config_file}` does not exists, please run `ilab init` "
+                "or point to a valid configuration file using `--config=<path>`."
+            )
+        else:
+            try:
+                config_obj = config.read_config(config_file)
+            except config.ConfigException as ex:
+                raise click.ClickException(str(ex))
+
+        ctx.obj = Lab(config_obj)
+        # default_map holds a dictionary with default values for each command parameters
+        ctx.default_map = config.get_dict(ctx.obj.config)
 
 
 @cli.command()
@@ -244,34 +267,36 @@ def diff(ctx, taxonomy_path, taxonomy_base, yaml_rules, quiet):
         logger = logging.getLogger(__name__)
     else:
         logger = ctx.obj.logger
-    if quiet:
-        try:
-            read_taxonomy(logger, taxonomy_path, taxonomy_base, yaml_rules)
-        except (SystemExit, yaml.YAMLError) as exc:
-            raise SystemExit(1) from exc
-        return
-    try:
-        updated_taxonomy_files = get_taxonomy_diff(taxonomy_path, taxonomy_base)
-    except (SystemExit, GitError) as exc:
-        click.secho(
-            f"Reading taxonomy failed with the following error: {exc}",
-            fg="red",
-        )
-        return
-    for f in updated_taxonomy_files:
-        click.echo(f)
+
+    if not quiet:
+        is_file = os.path.isfile(taxonomy_path)
+        if is_file:  # taxonomy_path is file
+            click.echo(taxonomy_path)
+        else:  # taxonomy_path is dir
+            try:
+                updated_taxonomy_files = get_taxonomy_diff(taxonomy_path, taxonomy_base)
+            except (SystemExit, GitError) as exc:
+                click.secho(
+                    f"Reading taxonomy failed with the following error: {exc}",
+                    fg="red",
+                )
+                raise SystemExit(1) from exc
+            for f in updated_taxonomy_files:
+                click.echo(f)
     try:
         read_taxonomy(logger, taxonomy_path, taxonomy_base, yaml_rules)
     except (SystemExit, yaml.YAMLError) as exc:
-        click.secho(
-            f"Reading taxonomy failed with the following error: {exc}",
-            fg="red",
-        )
+        if not quiet:
+            click.secho(
+                f"Reading taxonomy failed with the following error: {exc}",
+                fg="red",
+            )
         raise SystemExit(1) from exc
-    click.secho(
-        f"Taxonomy in /{taxonomy_path}/ is valid :)",
-        fg="green",
-    )
+    if not quiet:
+        click.secho(
+            f"Taxonomy in /{taxonomy_path}/ is valid :)",
+            fg="green",
+        )
 
 
 # ilab list => ilab diff
@@ -299,8 +324,7 @@ utils.make_lab_diff_aliases(cli, diff)
 @click.option(
     "--model-family",
     type=str,
-    default="merlinite",
-    help="Model family is used to specify which chat template to serve with",
+    help="Force model family to specify which chat template to serve with",
 )
 @click.pass_context
 def serve(ctx, model_path, gpu_layers, num_threads, max_ctx_size, model_family):
@@ -308,6 +332,9 @@ def serve(ctx, model_path, gpu_layers, num_threads, max_ctx_size, model_family):
     # pylint: disable=C0415
     # Local
     from .server import ServerException, server
+
+    # Redirect server stdout and stderr to the logger
+    log.stdout_stderr_to_logger(ctx.obj.logger)
 
     ctx.obj.logger.info(
         f"Using model '{model_path}' with {gpu_layers} gpu-layers and {max_ctx_size} max context size."
@@ -447,8 +474,7 @@ def serve(ctx, model_path, gpu_layers, num_threads, max_ctx_size, model_family):
 )
 @click.option(
     "--model-family",
-    default="merlinite",
-    help="model family to use when picking a generation template",
+    help="Force model family to use when picking a generation template",
 )
 @click.pass_context
 def generate(
@@ -481,6 +507,7 @@ def generate(
     from .server import ensure_server
 
     server_process = None
+    server_queue = None
     logger = logging.getLogger("TODO")
     prompt_file_path = config.DEFAULT_PROMPT_FILE
     if ctx.obj is not None:
@@ -490,8 +517,20 @@ def generate(
     if endpoint_url:
         api_base = endpoint_url
     else:
+        # Third Party
+        import llama_cpp
+
+        if not llama_cpp.llama_supports_gpu_offload():
+            # TODO: check for working offloading. The function only checks
+            # for compile time defines like `GGML_USE_CUDA`.
+            click.secho(
+                "llama_cpp_python is built without hardware acceleration. "
+                "ilab generate will be very slow.",
+                fg="red",
+            )
+
         try:
-            server_process, api_base = ensure_server(
+            server_process, api_base, server_queue = ensure_server(
                 ctx.obj.logger,
                 ctx.obj.config.serve,
                 tls_insecure,
@@ -557,9 +596,11 @@ def generate(
         )
         raise click.exceptions.Exit(1)
     finally:
-        if server_process:
+        if server_process and server_queue:
             server_process.terminate()
             server_process.join(timeout=30)
+            server_queue.close()
+            server_queue.join_thread()
 
 
 @cli.command()
@@ -599,6 +640,11 @@ def generate(
     help="Use model greedy decoding. Useful for debugging and reproducing errors.",
 )
 @click.option(
+    "--max-tokens",
+    type=click.INT,
+    help="Set a maximum number of tokens to request from the model endpoint.",
+)
+@click.option(
     "--endpoint-url",
     type=click.STRING,
     help="Custom URL endpoint for OpenAI-compatible API. Defaults to the `ilab serve` endpoint.",
@@ -636,9 +682,7 @@ def generate(
 )
 @click.option(
     "--model-family",
-    default="merlinite",
-    show_default=True,
-    help="model family to use when picking a chat template",
+    help="Force model family to use when picking a chat template",
 )
 @click.pass_context
 def chat(
@@ -649,6 +693,7 @@ def chat(
     session,
     quick_question,
     greedy_mode,
+    max_tokens,
     endpoint_url,
     api_key,
     tls_insecure,
@@ -661,14 +706,16 @@ def chat(
     # pylint: disable=C0415
     # Local
     from .chat.chat import ChatException, chat_cli
-    from .server import ensure_server
+    from .client import ClientException, list_models
+    from .server import ensure_server, is_temp_server_running
 
     if endpoint_url:
         api_base = endpoint_url
         server_process = None
+        server_queue = None
     else:
         try:
-            server_process, api_base = ensure_server(
+            server_process, api_base, server_queue = ensure_server(
                 ctx.obj.logger,
                 ctx.obj.config.serve,
                 tls_insecure,
@@ -683,6 +730,53 @@ def chat(
         if not api_base:
             api_base = ctx.obj.config.serve.api_base()
 
+    # if only the chat is running (`ilab chat`) and the temp server is not, the chat interacts
+    # in server mode (`ilab serve` is running somewhere, or we are talking to another
+    # OpenAI compatible endpoint).
+    if not is_temp_server_running():
+        # Try to get the model name right if we know we're talking to a local `ilab serve`.
+        #
+        # If the model from the CLI and the one in the config are the same, use the one from the
+        # server if they are different else let's use what the user provided
+        #
+        # 'model' will always get a value and never be None so it's hard to distinguish whether
+        # the value came from the user input or the default value.
+        # We can only assume that if the value is the same as the default value and the value
+        # from the config is the same as the default value, then the user didn't provide a value
+        # we then compare it with the value from the server to see if it's different
+        if (
+            model == config.DEFAULT_MODEL
+            and ctx.obj.config.chat.model == config.DEFAULT_MODEL
+            and api_base == ctx.obj.config.serve.api_base()
+        ):
+            try:
+                models = list_models(
+                    api_base=api_base,
+                    tls_insecure=tls_insecure,
+                    tls_client_cert=tls_client_cert,
+                    tls_client_key=tls_client_key,
+                    tls_client_passwd=tls_client_passwd,
+                )
+
+                # Currently, we only present a single model so we can safely assume that the first model
+                server_model = models.data[0].id if models is not None else None
+
+                # override 'model' with the first returned model if not provided so that the chat print
+                # the model used by the server
+                model = (
+                    server_model
+                    if server_model is not None
+                    and server_model != ctx.obj.config.chat.model
+                    else model
+                )
+
+            except ClientException as exc:
+                click.secho(
+                    f"Failed to list models from {api_base}. Please check the API key and endpoint.",
+                    fg="red",
+                )
+                raise click.exceptions.Exit(1) from exc
+
     try:
         chat_cli(
             logger=ctx.obj.logger,
@@ -695,6 +789,7 @@ def chat(
             session=session,
             qq=quick_question,
             greedy_mode=greedy_mode,
+            max_tokens=max_tokens,
             tls_insecure=tls_insecure,
             tls_client_cert=tls_client_cert,
             tls_client_key=tls_client_key,
@@ -704,9 +799,11 @@ def chat(
         click.secho(f"Executing chat failed with: {exc}", fg="red")
         raise click.exceptions.Exit(1)
     finally:
-        if server_process:
+        if server_process and server_queue:
             server_process.terminate()
             server_process.join(timeout=30)
+            server_queue.close()
+            server_queue.join_thread()
 
 
 @cli.command()
@@ -734,35 +831,38 @@ def chat(
     show_default=True,
     help="The local directory to download the model files into.",
 )
+@click.option(
+    "--hf-token",
+    default="",
+    envvar="HF_TOKEN",
+    help="User access token for connecting to the Hugging Face Hub.",
+)
 @click.pass_context
-def download(ctx, repository, release, filename, model_dir):
+def download(ctx, repository, release, filename, model_dir, hf_token):
     """Download the model(s) to train"""
     click.echo(f"Downloading model from {repository}@{release} to {model_dir}...")
-    if (
-        "HF_TOKEN" not in os.environ
-        and repository != "instructlab/merlinite-7b-lab-GGUF"
-    ):
+    if hf_token == "" and "instructlab" not in repository:
         raise ValueError(
-            "HF_TOKEN var needs to be set in your environment to download HF Model. The HF Token is used to authenticate your identity to the Hugginface Hub."
+            """HF_TOKEN var needs to be set in your environment to download HF Model.
+            Alternatively, the token can be passed with --hf-token flag.
+            The HF Token is used to authenticate your identity to the Hugging Face Hub."""
         )
     try:
         if ctx.obj is not None:
             hf_logging.set_verbosity(ctx.obj.config.general.log_level.upper())
-        files = list_repo_files(repo_id=repository, token=os.getenv("HF_TOKEN"))
+        files = list_repo_files(repo_id=repository, token=hf_token)
         if any(".safetensors" in string for string in files):
             if not os.path.exists(os.path.join(model_dir, repository)):
                 os.makedirs(name=os.path.join(model_dir, repository), exist_ok=True)
-            for f in files:
-                hf_hub_download(
-                    token=os.getenv("HF_TOKEN"),
-                    repo_id=repository,
-                    revision=release,
-                    filename=f,
-                    local_dir=os.path.join(model_dir, repository),
-                )
+            snapshot_download(
+                token=hf_token,
+                repo_id=repository,
+                revision=release,
+                local_dir=os.path.join(model_dir, repository),
+            )
         else:
             hf_hub_download(
-                token=os.getenv("HF_TOKEN"),
+                token=hf_token,
                 repo_id=repository,
                 revision=release,
                 filename=filename,
@@ -780,12 +880,12 @@ class TorchDeviceParam(click.ParamType):
     """Parse and convert device string
 
     Returns a torch.device object:
-    - type is one of 'cpu' or 'cuda')
-    - index is None or CUDA/ROCm device index (0 for first GPU)
+    - type is one of 'cpu', 'cuda', 'hpu'
+    - index is None or device index (e.g. 0 for first GPU)
     """
 
     name = "deviceinfo"
-    supported_devices = {"cuda", "cpu"}
+    supported_devices = {"cuda", "cpu", "hpu"}
 
     def convert(self, value, param, ctx) -> "torch.device":
         # pylint: disable=C0415
@@ -799,7 +899,7 @@ class TorchDeviceParam(click.ParamType):
             except RuntimeError as e:
                 self.fail(str(e), param, ctx)
 
-        if device.type not in {"cuda", "cpu"}:
+        if device.type not in self.supported_devices:
             supported = ", ".join(repr(s) for s in sorted(self.supported_devices))
             self.fail(
                 f"Unsupported device type '{device.type}'. Only devices "
@@ -821,6 +921,14 @@ class TorchDeviceParam(click.ParamType):
             # map unqualified 'cuda' to current device
             if device.index is None:
                 device = torch.device(device.type, torch.cuda.current_device())
+
+        if device.type == "hpu":
+            click.secho(
+                "WARNING: HPU support is experimental, unstable, and not "
+                "optimized, yet.",
+                fg="red",
+                bold=True,
+            )
 
         return device
 
@@ -953,6 +1061,13 @@ def train(
             # generated input files reverse sorted by name (contains timestamp)
             train_files = sorted(glob(input_dir + "/train_*"), reverse=True)
             test_files = sorted(glob(input_dir + "/test_*"), reverse=True)
+
+            if not train_files or not test_files:
+                click.secho(
+                    f"{input_dir} does not contain training or test files, did you run `ilab generate`?",
+                    fg="red",
+                )
+                raise click.exceptions.Exit(1)
             if len(train_files) > 1 or len(test_files) > 1:
                 # pylint: disable=f-string-without-interpolation
                 click.secho(
@@ -974,12 +1089,6 @@ def train(
                 fg="red",
             )
             raise click.exceptions.Exit(1)
-        except IndexError as exc:
-            click.secho(
-                f"Could not copy into data directory: {exc}",
-                fg="red",
-            )
-            raise click.exceptions.Exit(1)
 
     if not utils.is_macos_with_m_chip():
         # Local
@@ -989,6 +1098,7 @@ def train(
         statistics = []
 
         linux_train(
+            ctx=ctx,
             train_file=train_files[0],
             test_file=test_files[0],
             model_name=model_name,
@@ -999,10 +1109,17 @@ def train(
         )
 
         training_results_dir = "./training_results"
-        os.makedirs(training_results_dir, exist_ok=True)
 
         final_results_dir = training_results_dir + "/final"
         os.makedirs(final_results_dir, exist_ok=True)
+
+        gguf_models_dir = "./models"
+        if not os.path.isdir(gguf_models_dir):
+            os.mkdir(gguf_models_dir)
+        gguf_models_file = os.path.join(gguf_models_dir, "ggml-model-f16.gguf")
+        # Remove previously trained model, its taking up space we may need in the next step
+        if os.path.isfile(gguf_models_file):
+            os.remove(gguf_models_file)
 
         # TODO: Figure out what to do when there are multiple checkpoint dirs.
         # Right now it's just copying files from the first one numerically not necessarily the best one
@@ -1038,17 +1155,25 @@ def train(
         shutil.copy(generation_config_json[0], final_results_dir)
         print("Copied ", generation_config_json[0], "to ", final_results_dir)
         for file in safe_tensors:
-            shutil.copy(file, final_results_dir)
-            print("Copied ", file, "to ", final_results_dir)
+            shutil.move(file, final_results_dir)
+            print("Moved ", file, "to ", final_results_dir)
 
-        convert_llama_to_gguf(model=final_results_dir, pad_vocab=True)
+        if four_bit_quant:
+            print(
+                "SKIPPING CONVERSION to gguf. This is unsupported with --4-bit-quant. "
+                + "See https://github.com/instructlab/instructlab/issues/579."
+            )
+            return
 
-        gguf_models_dir = "./models"
-        if not os.path.isdir(gguf_models_dir):
-            os.mkdir(gguf_models_dir)
-        shutil.copy(final_results_dir + "/ggml-model-f16.gguf", gguf_models_dir)
-        # cleanup original copy of model
-        os.remove(final_results_dir + "/ggml-model-f16.gguf")
+        gguf_file_path = convert_llama_to_gguf(model=final_results_dir, pad_vocab=True)
+
+        # Remove safetensors files to save space, were done with them here
+        # and the huggingface lib has them cached
+        for file in glob(final_results_dir + "/*.safetensors"):
+            os.remove(file)
+
+        shutil.move(gguf_file_path, gguf_models_file)
+
         # cleanup checkpoint dir since it's name is unpredictable
         # TODO: figure out how checkpoint dirs should be cleaned up
         # checkpoint_dirs = glob(training_results_dir + "/checkpoint*")
@@ -1228,19 +1353,33 @@ def test(data_dir, model_dir, adapter_file):
     is_flag=True,
     help="Whether to skip quantization while converting to GGUF.",
 )
+@click.option(
+    "--model-name",
+    help="Name of the model being trained/converted. Informs the naming of the final trained model file",
+    default=None,
+    show_default=True,
+)
 @utils.macos_requirement(echo_func=click.secho, exit_exception=click.exceptions.Exit)
-def convert(model_dir, adapter_file, skip_de_quantize, skip_quantize):
+@click.pass_context
+def convert(ctx, model_dir, adapter_file, skip_de_quantize, skip_quantize, model_name):
     """Converts model to GGUF"""
     # pylint: disable=C0415
+    # Third Party
+    from instructlab_quantize import run_quantize  # pylint: disable=import-error
+
     # Local
     from .llamacpp.llamacpp_convert_to_gguf import convert_llama_to_gguf
     from .train.lora_mlx.convert import convert_between_mlx_and_pytorch
     from .train.lora_mlx.fuse import fine_tune
 
+    # compute model name from model-dir if not supplied
+    if model_name is None:
+        mlx_q_suffix = "-mlx-q"
+        model_name = model_dir.split("/")[-1]
+        model_name = model_name.replace(mlx_q_suffix, "")
+
     if adapter_file is None:
         adapter_file = os.path.join(model_dir, "adapters.npz")
-    cli_dir = os.path.dirname(os.path.abspath(__file__))
-
     source_model_dir = model_dir
     model_dir_fused = f"{source_model_dir}-fused"
 
@@ -1252,19 +1391,41 @@ def convert(model_dir, adapter_file, skip_de_quantize, skip_quantize):
         de_quantize=not skip_de_quantize,
     )
 
-    model_dir_fused_pt = f"{model_dir_fused}-pt"
+    ctx.obj.logger.info(f"deleting {source_model_dir}...")
+    shutil.rmtree(source_model_dir)
 
+    model_dir_fused_pt = f"{model_name}-trained"
     # this converts MLX to PyTorch
     convert_between_mlx_and_pytorch(
         hf_path=model_dir_fused, mlx_path=model_dir_fused_pt, local=True, to_pt=True
     )
 
-    convert_llama_to_gguf(model=model_dir_fused_pt, pad_vocab=True)
+    ctx.obj.logger.info(f"deleting {model_dir_fused}...")
+    shutil.rmtree(model_dir_fused)
 
-    # quantize 4-bi GGUF (optional)
+    convert_llama_to_gguf(
+        model=model_dir_fused_pt,
+        pad_vocab=True,
+        skip_unknown=True,
+        outfile=f"{model_dir_fused_pt}/{model_name}.gguf",
+    )
+
+    ctx.obj.logger.info(f"deleting safetensors files from {model_dir_fused_pt}...")
+    for file in glob(os.path.join(model_dir_fused_pt, "*.safetensors")):
+        os.remove(file)
+
+    # quantize to 4-bit GGUF (optional)
     if not skip_quantize:
-        gguf_model_dir = f"{model_dir_fused_pt}/ggml-model-f16.gguf"
-        gguf_model_q_dir = f"{model_dir_fused_pt}/ggml-model-Q4_K_M.gguf"
-        script = os.path.join(cli_dir, "llamacpp/quantize")
-        cmd = f"{script} {gguf_model_dir} {gguf_model_q_dir} Q4_K_M"
-        os.system("{}".format(cmd))
+        gguf_model_dir = f"{model_dir_fused_pt}/{model_name}.gguf"
+        gguf_model_q_dir = f"{model_dir_fused_pt}/{model_name}-Q4_K_M.gguf"
+        run_quantize(gguf_model_dir, gguf_model_q_dir, "Q4_K_M")
+
+    ctx.obj.logger.info(f"deleting {model_dir_fused_pt}/{model_name}.gguf...")
+    os.remove(os.path.join(model_dir_fused_pt, f"{model_name}.gguf"))
+
+
+@cli.command
+def sysinfo():
+    """Print system information"""
+    for key, value in get_sysinfo().items():
+        print(f"{key}: {value}")

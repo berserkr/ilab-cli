@@ -20,7 +20,7 @@ import uvicorn
 
 # Local
 from .client import ClientException, list_models
-from .config import get_api_base
+from .config import get_api_base, get_model_family
 
 templates = [
     {
@@ -61,6 +61,7 @@ def ensure_server(
     try:
         api_base = serve_config.api_base()
         logger.debug(f"Trying to connect to {api_base}...")
+        # pylint: disable=duplicate-code
         list_models(
             api_base=api_base,
             tls_insecure=tls_insecure,
@@ -68,10 +69,10 @@ def ensure_server(
             tls_client_key=tls_client_key,
             tls_client_passwd=tls_client_passwd,
         )
-        return (None, None)
+        return (None, None, None)
+        # pylint: enable=duplicate-code
     except ClientException:
         tried_ports = set()
-        # TODO: use default server, "spawn" doesn't work?
         mpctx = multiprocessing.get_context(None)
         # use a queue to communicate between the main process and the server process
         queue = mpctx.Queue()
@@ -119,7 +120,6 @@ def ensure_server(
                 "host": host,
                 "queue": queue,
             },
-            daemon=True,
         )
         server_process.start()
 
@@ -136,7 +136,7 @@ def ensure_server(
             # pylint: disable=raise-missing-from
             raise queue.get()
 
-        return (server_process, temp_api_base)
+        return (server_process, temp_api_base, queue)
 
 
 def server(
@@ -163,9 +163,17 @@ def server(
         settings.n_threads = threads
     try:
         app = create_app(settings=settings)
+
+        @app.get("/")
+        def read_root():
+            return {
+                "message": "Hello from InstructLab! Visit us at https://instructlab.ai"
+            }
     except ValueError as exc:
         if queue:
             queue.put(exc)
+            queue.close()
+            queue.join_thread()
             return
         raise ServerException(f"failed creating the server application: {exc}") from exc
 
@@ -173,7 +181,7 @@ def server(
     eos_token = "<|endoftext|>"
     bos_token = ""
     for template_dict in templates:
-        if template_dict["model"] == model_family:
+        if template_dict["model"] == get_model_family(model_family, model_path):
             template = template_dict["template"]
             if template_dict["model"] == "mixtral":
                 eos_token = "</s>"
@@ -190,6 +198,8 @@ def server(
     except Exception as exc:
         if queue:
             queue.put(exc)
+            queue.close()
+            queue.join_thread()
             return
         raise ServerException(f"failed creating the server application: {exc}") from exc
 
@@ -213,6 +223,7 @@ def server(
     # In this case, we want to redirect stdout to null to avoid cluttering the chat with messages
     # returned by the server.
     if is_temp_server_running():
+        # TODO: redirect temp server logs to a file instead of hidding the logs completely
         # Redirect stdout and stderr to null
         with (
             open(os.devnull, "w", encoding="utf-8") as f,
@@ -222,6 +233,10 @@ def server(
             s.run()
     else:
         s.run()
+
+    if queue:
+        queue.close()
+        queue.join_thread()
 
 
 def can_bind_to_port(host, port):

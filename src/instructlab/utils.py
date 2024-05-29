@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Mapping, Optional, Union
 import copy
 import glob
 import json
-import logging
 import os
 import platform
 import re
@@ -34,10 +33,7 @@ rules:
     max: 120
 """
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s %(asctime)s %(filename)s:%(lineno)d %(message)s",
-)
+DEFAULT_CHUNK_OVERLAP = 100
 
 
 class TaxonomyReadingException(Exception):
@@ -221,7 +217,9 @@ def get_documents(
                         with open(file_path, "r", encoding="utf-8") as file:
                             file_contents.append(file.read())
 
-            return file_contents
+            if file_contents:
+                return file_contents
+            raise SystemExit("Couldn't find knowledge documents")
         except (OSError, exc.GitCommandError, FileNotFoundError) as e:
             raise e
 
@@ -235,6 +233,14 @@ def git_clone_checkout(
     return repo
 
 
+def num_tokens_from_words(num_words) -> int:
+    return int(num_words * 1.3)  # 1 word ~ 1.3 token
+
+
+def num_chars_from_tokens(num_tokens) -> int:
+    return int(num_tokens * 4)  # 1 token ~ 4 English character
+
+
 def chunk_document(documents: List, server_ctx_size, chunk_word_count) -> List[str]:
     """
     Iterates over the documents and splits them into chunks based on the word count provided by the user.
@@ -245,7 +251,7 @@ def chunk_document(documents: List, server_ctx_size, chunk_word_count) -> List[s
     Returns:
          List[str]: List of chunked documents.
     """
-    no_tokens_per_doc = int(chunk_word_count * 1.3)  # 1 word ~ 1.3 token
+    no_tokens_per_doc = num_tokens_from_words(chunk_word_count)
     if no_tokens_per_doc > int(server_ctx_size - 1024):
         raise ValueError(
             "Error: {}".format(
@@ -256,9 +262,9 @@ def chunk_document(documents: List, server_ctx_size, chunk_word_count) -> List[s
         )
     content = []
     text_splitter = RecursiveCharacterTextSplitter(
-        separators=["\n\n", "\n"],
-        chunk_size=int(no_tokens_per_doc * 4),  # 1 token ~ 4 English character
-        chunk_overlap=100,
+        separators=["\n\n", "\n", " "],
+        chunk_size=num_chars_from_tokens(no_tokens_per_doc),
+        chunk_overlap=DEFAULT_CHUNK_OVERLAP,
     )
 
     for docs in documents:
@@ -419,6 +425,12 @@ def read_taxonomy_file(
         if not contents:
             logger.warn(f"Skipping {file_path} because it is empty!")
             warnings += 1
+            return None, warnings, errors
+        if not isinstance(contents, Mapping):
+            logger.error(
+                f"{file_path} is not valid. The top-level element is not an object with key-value pairs."
+            )
+            errors += 1
             return None, warnings, errors
 
         # do general YAML linting if specified

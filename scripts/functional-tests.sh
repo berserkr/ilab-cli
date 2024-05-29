@@ -4,14 +4,14 @@
 set -ex
 
 # build a prompt string that includes the time, source file, line number, and function name
-export PS4='+$(printf "%(%Y-%m-%d %T)T") ${BASH_SOURCE}:${LINENO}: ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+export PS4='+$(date +"%Y-%m-%d %T") ${BASH_VERSION}:${BASH_SOURCE}:${LINENO}: ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 
 pip install .
 
 export TEST_CTX_SIZE_LAB_SERVE_LOG_FILE=test_ctx_size_lab_serve.log
 export TEST_CTX_SIZE_LAB_CHAT_LOG_FILE=test_ctx_size_lab_chat.log
 
-for cmd in ilab expect; do
+for cmd in ilab expect timeout; do
     if ! type -p $cmd; then
         echo "Error: $cmd is not installed"
         exit 1
@@ -21,6 +21,8 @@ done
 PID_SERVE=
 PID_CHAT=
 
+chat_shot="ilab chat -qq"
+
 cleanup() {
     set +e
     if [ "${1:-0}" -ne 0 ]; then
@@ -28,17 +30,20 @@ cleanup() {
     fi
     for pid in $PID_SERVE $PID_CHAT; do
         if [ -n "$pid" ]; then
-            kill $pid
+            kill "$pid"
+            wait "$pid"
         fi
     done
     rm -f "$TEST_CTX_SIZE_LAB_SERVE_LOG_FILE" \
         "$TEST_CTX_SIZE_LAB_CHAT_LOG_FILE" \
         test_session_history
     rm -rf test_taxonomy
-    # revert log level change from test_temp_server()
-    sed -i 's/DEBUG/INFO/g' config.yaml
     # revert port change from test_bind_port()
-    sed -i 's/9999/8000/g' config.yaml
+    sed -i.bak 's/9999/8000/g' config.yaml
+    # revert model name change from test_model_print()
+    sed -i.bak "s/baz/merlinite-7b-lab-Q4_K_M/g" config.yaml
+    mv models/foo.gguf models/merlinite-7b-lab-Q4_K_M.gguf || true
+    rm -f config.yaml.bak
     set -e
 }
 
@@ -49,11 +54,29 @@ rm -f config.yaml
 # print version
 ilab --version
 
+# print system information
+ilab sysinfo
+
 # pipe 3 carriage returns to ilab init to get past the prompts
 echo -e "\n\n\n" | ilab init
 
 # Enable Debug in func tests
-sed -i -e 's/log_level:.*/log_level: DEBUG/g;' config.yaml
+sed -i.bak -e 's/log_level:.*/log_level: DEBUG/g;' config.yaml
+
+# It looks like GitHub action MacOS runner does not have graphics
+# so we need to disable the GPU layers if we are running in GitHub actions
+if [[ "$(uname)" == "Darwin" ]]; then
+    if command -v system_profiler; then
+        if system_profiler SPDisplaysDataType|grep "Metal Support"; then
+            echo "Metal GPU detected"
+        else
+            echo "No Metal GPU detected"
+            sed -i.bak -e 's/gpu_layers: -1/gpu_layers: 0/g;' config.yaml
+        fi
+    else
+        echo "system_profiler not found, cannot determine GPU"
+    fi
+fi
 
 # download the latest version of the ilab
 ilab download
@@ -77,7 +100,7 @@ test_bind_port(){
     }
 
     # configure a different port
-    exec sed -i 's/8000/9999/g' config.yaml
+    exec sed -i.bak 's/8000/9999/g' config.yaml
 
     # check that ilab serve is working on the new port
     # catch ERROR strings in the output
@@ -91,45 +114,45 @@ test_bind_port(){
 
 test_ctx_size(){
     # A context size of 55 will allow a small message
-    ilab serve --max-ctx-size 55 &> "$TEST_CTX_SIZE_LAB_SERVE_LOG_FILE" &
+    ilab serve --max-ctx-size 25 &> "$TEST_CTX_SIZE_LAB_SERVE_LOG_FILE" &
     PID_SERVE=$!
 
     # Make sure the server has time to open the port
     # if "ilab chat" tests it before its open then it will run its own server without --max-ctx-size 1
-    sleep 5
+    wait_for_server
 
-    # Should succeed
-    ilab chat -qq "Hello"
+    # SHOULD SUCCEED: ilab chat will trim the SYS_PROMPT then take the second message
+    ${chat_shot} "Hello"
 
-    # the error is expected so let's ignore it to not fall into the trap
-    set +e
-    # now chat with the server and exceed the context size
-    ilab chat &> "$TEST_CTX_SIZE_LAB_CHAT_LOG_FILE" <<EOF &
-hello, I am a ci message that should not finish because I am too long for the context window, tell me about your day please, I love to hear all about it, tell me about the time you could only take 55 tokens
-EOF
+    # SHOULD FAIL: ilab chat will trim the SYS_PROMPT AND the second message, then raise an error
+    # The errors from failures will be written into the serve log and chat log files
+    ${chat_shot} "hello, I am a ci message that should not finish because I am too long for the context window, tell me about your day please?
+    How many tokens could you take today. Could you tell me about the time you could only take twenty five tokens" &> "$TEST_CTX_SIZE_LAB_CHAT_LOG_FILE" &
     PID_CHAT=$!
-    wait_for_pid_to_disappear $PID_CHAT
-    # reset the PID_CHAT variable so that the cleanup function doesn't try to kill it
-    PID_CHAT=
-
-    # re-activate the error trap
-    set -e
 
     # look for the context size error in the server logs
-    timeout 10 bash -c '
+    if ! timeout 20 bash -c '
         until grep -q "exceed context window of" "$TEST_CTX_SIZE_LAB_SERVE_LOG_FILE"; do
         echo "waiting for context size error"
         sleep 1
     done
-'
+'; then
+        echo "context size error not found in server logs"
+        cat $TEST_CTX_SIZE_LAB_SERVE_LOG_FILE
+        exit 1
+    fi
 
     # look for the context size error in the chat logs
-    timeout 10 bash -c '
+    if ! timeout 20 bash -c '
         until grep -q "Message too large for context size." "$TEST_CTX_SIZE_LAB_CHAT_LOG_FILE"; do
         echo "waiting for chat error"
         sleep 1
     done
-'
+'; then
+        echo "context size error not found in chat logs"
+        cat $TEST_CTX_SIZE_LAB_CHAT_LOG_FILE
+        exit 1
+    fi
 }
 
 test_server_shutdown_while_chatting(){
@@ -150,20 +173,6 @@ test_server_shutdown_while_chatting(){
             timeout { exit 1 }
         }
     '
-}
-
-wait_for_pid_to_disappear(){
-    for i in $(seq 1 20); do
-        if ! test -d /proc/$1; then
-            break
-        fi
-        # error if the process is still running
-        if [ $i -eq 20 ]; then
-            echo "chat process is still running"
-            exit 1
-        fi
-        sleep 1
-    done
 }
 
 test_loading_session_history(){
@@ -220,7 +229,7 @@ seed_examples:
 task_description: "simple maths"
 EOF
 
-    sed -i -e 's/num_instructions:.*/num_instructions: 1/g' config.yaml
+    sed -i.bak -e 's/num_instructions:.*/num_instructions: 1/g' config.yaml
 
     # This should be finished in a minut or so but time it out incase it goes wrong
     timeout 10m ilab generate --taxonomy-path test_taxonomy/compositional_skills/simple_math.yaml
@@ -234,9 +243,6 @@ EOF
 }
 
 test_temp_server(){
-    nc -l 8000 --keep-open &
-    PID_SERVE=$!
-    sed -i 's/INFO/DEBUG/g' config.yaml
     expect -c '
         set timeout 120
         spawn ilab chat
@@ -290,8 +296,90 @@ test_temp_server_ignore_internal_messages(){
             "Disconnected from client (via refresh/close)" { exit 1 }
         }
         send "exit\r"
-        expect eof
+        expect {
+            "Traceback (most recent call last):" { set exp_result 1 }
+            default { set exp_result 0 }
+        }
+        if { $exp_result != 0 } {
+            puts stderr "Error: ilab chat command failed"
+            exit 1
+        }
     '
+}
+
+test_server_welcome_message(){
+    # test that the server welcome message is displayed
+    ilab serve &
+    PID_SERVE=$!
+
+    wait_for_server
+}
+
+wait_for_server(){
+    if ! timeout 30 bash -c '
+        until curl 127.0.0.1:8000|grep "{\"message\":\"Hello from InstructLab! Visit us at https://instructlab.ai\"}"; do
+            echo "waiting for server to start"
+            sleep 1
+        done
+    '; then
+        echo "server did not start"
+        exit 1
+    fi
+}
+
+test_model_print(){
+    mv models/merlinite-7b-lab-Q4_K_M.gguf models/foo.gguf
+    ilab serve --model-path models/foo.gguf &
+    PID_SERVE=$!
+
+    wait_for_server
+
+    # validate that we print the model from the server since it is different from the config
+    expect -c '
+        spawn ilab chat
+        expect {
+            -re "Welcome to InstructLab Chat w/ \\\u001b\\\[1mMODELS/FOO\\.GGUF" { exit 0 }
+            eof { catch wait result; exit [lindex $result 3] }
+            timeout { exit 1 }
+        }
+    '
+
+    # validate that we print the model from the CLI
+    expect -c '
+        set timeout 30
+        spawn ilab chat -m bar
+        expect {
+            -re "Welcome to InstructLab Chat w/ \\\u001b\\\[1mBAR\\\u001b\\\[0m" { exit 0 }
+            eof { catch wait result; exit [lindex $result 3] }
+            timeout { exit 1 }
+        }
+    '
+
+    # validate that we print the model from the config
+    expect -c '
+        exec sed -i.bak "s/merlinite-7b-lab-Q4_K_M/baz/g" config.yaml
+        spawn ilab chat
+        expect {
+            -re "Welcome to InstructLab Chat w/ \\\u001b\\\[1mBAZ\\\u001b\\\[0m" {
+                exec sed -i.bak "s/baz/merlinite-7b-lab-Q4_K_M/g" config.yaml
+                exit 0
+            }
+            eof { catch wait result; exit [lindex $result 3] }
+            timeout { exit 1 }
+        }
+    '
+
+    # If we don't specify a model, validate that we print the model reported
+    # by the server since it is different from the config.
+    expect -c '
+        spawn ilab chat
+        expect {
+            -re "Welcome to InstructLab Chat w/ \\\u001b\\\[1mMODELS/FOO\\.GGUF" { exit 0 }
+            eof { catch wait result; exit [lindex $result 3] }
+            timeout { exit 1 }
+        }
+    '
+
 }
 
 ########
@@ -314,5 +402,9 @@ cleanup
 test_no_chat_logs
 cleanup
 test_temp_server_ignore_internal_messages
+cleanup
+test_server_welcome_message
+cleanup
+test_model_print
 
 exit 0

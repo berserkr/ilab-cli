@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - "main"
+      - "release-**"
     paths:
       - '**.py'
       - 'pyproject.toml'
@@ -17,6 +18,7 @@ on:
   pull_request:
     branches:
       - "main"
+      - "release-**"
     paths:
       - '**.py'
       - 'pyproject.toml'
@@ -58,6 +60,11 @@ jobs:
         run: |
           sudo apt-get install -y expect
 
+      - name: Install tools on MacOS
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          brew install expect coreutils bash
+
       - name: Setup Python ${{ matrix.python }}
         uses: actions/setup-python@v5
         with:
@@ -66,6 +73,10 @@ jobs:
           cache-dependency-path: |
             **/pyproject.toml
             **/requirements*.txt
+
+      - name: Remove llama-cpp-python from cache
+        run: |
+          pip cache remove llama_cpp_python
 
       - name: Cache huggingface
         uses: actions/cache@v4
@@ -80,10 +91,74 @@ jobs:
           python -m pip install tox tox-gh>=1.2
 
       - name: Run unit and functional tests with tox
-        if: startsWith(matrix.platform, 'ubuntu')
         run: tox
 
-      # The functional test shell script does not work on macOS.
-      - name: Run unit tests with tox (macOS)
-        if: startsWith(matrix.platform, 'macos')
-        run: tox -e py-unit
+      - name: Remove llama-cpp-python from cache
+        if: always()
+        run: |
+          pip cache remove llama_cpp_python
+
+  test-workflow-complete:
+    needs: ["test"]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test Workflow Complete
+        run: echo "Test Workflow Complete"
+
+  man:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # https://github.com/actions/checkout/issues/249
+          fetch-depth: 0
+          submodules: true
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+          cache: pip
+          cache-dependency-path: |
+            **/pyproject.toml
+            **/requirements*.txt
+
+      - name: Remove llama-cpp-python from cache
+        run: |
+          pip cache remove llama_cpp_python
+
+      - name: Run tox docs target (expect failure since tox is not present)
+        run: make man
+        continue-on-error: true
+
+      - name: Run tox docs target
+        id: tox-docs
+        run: make man || echo "status=failed" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Check for 'make man' failure
+        run: |
+          if [[ "${{ steps.tox-docs.outputs.status }}" != "failed" ]]; then
+            echo "'make man' did not fail as expected"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install tox
+
+      - name: Run tox docs target
+        run: make man
+
+      - name: Check that man pages were generated
+        uses: andstor/file-existence-action@v3
+        with:
+          files: 'man/*.1'
+          fail: true
+
+      - name: Remove llama-cpp-python from cache
+        if: always()
+        run: |
+          pip cache remove llama_cpp_python

@@ -3,16 +3,21 @@
 ![Lint](https://github.com/instructlab/instructlab/actions/workflows/lint.yml/badge.svg?branch=main)
 ![Tests](https://github.com/instructlab/instructlab/actions/workflows/test.yml/badge.svg?branch=main)
 ![Build](https://github.com/instructlab/instructlab/actions/workflows/pypi.yaml/badge.svg?branch=main)
-[![Demo](https://img.shields.io/badge/Demo-v0.13.0-blue)](https://asciinema.org/a/PmRU7IrReep04FY6qpzo2Zclc)
+![Release](https://img.shields.io/github/v/release/instructlab/instructlab)
 ![License](https://img.shields.io/github/license/instructlab/instructlab)
 
 ## 📖 Contents
 
-- [❓What is `ilab`](#-what-is-ilab)
+- [Welcome to the InstructLab CLI](#welcome-to-the-instructlab-cli)
+- [❓ What is `ilab`](#-what-is-ilab)
 - [📋 Requirements](#-requirements)
 - [✅ Getting started](#-getting-started)
-  - [🧰 Installing`ilab`](#-installing-ilab)
-  - [🏗️ Initialize `ilab`](#%EF%B8%8F-initialize-ilab)
+  - [🧰 Installing `ilab`](#-installing-ilab)
+    - [Install with no GPU acceleration and PyTorch without CUDA bindings](#install-using-pytorch-without-cuda-bindings-and-no-gpu-acceleration)
+    - [Install with AMD ROCm](#install-with-amd-rocm)
+    - [Install with Apple Metal on M1/M2/M3 Macs](#install-with-apple-metal-on-m1m2m3-macs)
+    - [Install with Nvidia CUDA](#install-with-nvidia-cuda)
+  - [🏗️ Initialize `ilab`](#️-initialize-ilab)
   - [📥 Download the model](#-download-the-model)
   - [🍴 Serving the model](#-serving-the-model)
   - [📣 Chat with the model (Optional)](#-chat-with-the-model-optional)
@@ -20,12 +25,16 @@
   - [🎁 Contribute knowledge or compositional skills](#-contribute-knowledge-or-compositional-skills)
   - [📜 List and validate your new data](#-list-and-validate-your-new-data)
   - [🚀 Generate a synthetic dataset](#-generate-a-synthetic-dataset)
-  - [👩‍🏫 Train the model](#-train-the-model)
-  - [Test the newly trained model](#-test-the-newly-trained-model)
+  - [👩‍🏫 Training the model](#-training-the-model)
+    - [Train the model locally on Linux](#train-the-model-locally-on-linux)
+    - [Train the model locally on M-series Macs](#train-the-model-locally-on-an-m-series-mac)
+    - [Train the model locally with GPU acceleration](#train-the-model-locally-with-gpu-acceleration)
+    - [Train the model in the cloud](#train-the-model-in-the-cloud)
+  - [📜 Test the newly trained model](#-test-the-newly-trained-model)
   - [🍴 Serve the newly trained model](#-serve-the-newly-trained-model)
-  - [📣 Chat with the new model (not optional this time)](#-chat-with-the-new-model-not-optional-this-time)
+- [📣 Chat with the new model (not optional this time)](#-chat-with-the-new-model-not-optional-this-time)
 - [🎁 Submit your new knowledge or skills](#-submit-your-new-knowledge-or-skills)
-- [📬 Contributing to Instruct-Lab CLI](#-contributing)
+- [📬 Contributing](#-contributing)
 
 ## Welcome to the InstructLab CLI
 
@@ -37,25 +46,34 @@ Large Language Models (LLMs.) The "**lab**" in Instruct**Lab** 🐶 stands for
 
 ## ❓ What is `ilab`
 
-`ilab` is a Command-Line Interface (CLI) tool that allows you to:
+`ilab` is a Command-Line Interface (CLI) tool that allows you to perform the following actions:
 
 1. Download a pre-trained Large Language Model (LLM).
 1. Chat with the LLM.
 
-To add new knowledge and skills to the pre-trained LLM you have to add new information to the companion [taxonomy](https://github.com/instructlab/taxonomy.git) repository.
-After that is done, you can:
+To add new knowledge and skills to the pre-trained LLM, add information to the companion [taxonomy](https://github.com/instructlab/taxonomy.git) repository.
+
+After you have added knowledge and skills to the taxonomy, you can perform the following actions:
 
 1. Use `ilab` to generate new synthetic training data based on the changes in your local `taxonomy` repository.
 1. Re-train the LLM with the new training data.
 1. Chat with the re-trained LLM to see the results.
 
-The full process is described graphically in the [workflow diagram](./docs/workflow.png).
+```mermaid
+graph TD;
+  download-->chat
+  chat[Chat with the LLM]-->add
+  add[Add new knowledge\nor skill to taxonomy]-->generate[generate new\nsynthetic training data]
+  generate-->train
+  train[Re-train]-->|Chat with\nthe re-trained LLM\nto see the results|chat
+```
+
+For an overview of the full workflow, see the [workflow diagram](./docs/workflow.png).
 
 > [!IMPORTANT]
-> It is important to understand that running InstructLab on a laptop will give you a low-fidelity approximation of both synthetic data generation (using the `ilab generate` command)
-> and model instruction tuning (using the `ilab train` command, which uses QLoRA.) The quality of the results you get using these tools on a laptop will not be as high-fidelity as they might be using
-> a larger teacher model and a different training method. We have optimized InstructLab to enable community members with modest hardware to be able to use the technique. If you have more sophisticated
-> hardware, you can configure InstructLab to use a larger teacher model [such as Mixtral](https://huggingface.co/docs/transformers/model_doc/mixtral) in order to achieve higher-fidelity results.
+> We have optimized InstructLab so that community members with commodity hardware can perform these steps. However, running InstructLab on a laptop will provide a low-fidelity approximation of synthetic data generation
+> (using the `ilab generate` command) and model instruction tuning (using the `ilab train` command, which uses QLoRA). To achieve higher quality, use more sophisticated hardware and configure InstructLab to use a
+> larger teacher model [such as Mixtral](https://huggingface.co/docs/transformers/model_doc/mixtral).
 
 ## 📋 Requirements
 
@@ -65,12 +83,14 @@ The full process is described graphically in the [workflow diagram](./docs/workf
 - Approximately 60GB disk space (entire process)
 
 > **NOTE:** PyTorch 2.2.1 does not support `torch.compile` with Python 3.12. On Fedora 39+, install `python3.11-devel` and create the virtual env with `python3.11` if you wish to use PyTorch's JIT compiler.
+<!-- -->
+> **NOTE:** When installing the `ilab` CLI on macOS, you may have to run the `xcode select --install` command, installing the required packages previously listed.
 
 ## ✅ Getting started
 
 ### 🧰 Installing `ilab`
 
-1. If you are on Fedora Linux, install C++, Python 3.9+, and other necessary tools by running the following command:
+1. When installing on Fedora Linux, install C++, Python 3.9+, and other necessary tools by running the following command:
 
    ```shell
    sudo dnf install g++ gcc make pip python3 python3-devel python3-GitPython
@@ -78,9 +98,11 @@ The full process is described graphically in the [workflow diagram](./docs/workf
 
    Optional: If `g++` is not found, try `gcc-c++` by running the following command:
 
-     ```shell
-     sudo dnf install gcc-c++ gcc make pip python3 python3-devel python3-GitPython
-     ```
+   ```shell
+   sudo dnf install gcc-c++ gcc make pip python3 python3-devel python3-GitPython
+   ```
+
+   If you are running on macOS, this installation is not necessary and you can begin your process with the following step.  
 
 2. Create a new directory called `instructlab` to store the files the `ilab` CLI needs when running and `cd` into the directory by running the following command:
 
@@ -91,15 +113,65 @@ The full process is described graphically in the [workflow diagram](./docs/workf
 
    > **NOTE:** The following steps in this document use [Python venv](https://docs.python.org/3/library/venv.html) for virtual environments. However, if you use another tool such as [pyenv](https://github.com/pyenv/pyenv) or [Conda Miniforge](https://github.com/conda-forge/miniforge) for managing Python environments on your machine continue to use that tool instead. Otherwise, you may have issues with packages that are installed but not found in `venv`.
 
-3. Install and activate your `venv` environment by running the following command:
+3. There are a few ways you can locally install the `ilab` CLI. Select your preferred installation method from the following instructions. You can then install `ilab` and activate your `venv` environment.
 
-   ```shell
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install git+https://github.com/instructlab/instructlab.git@stable
+   > **NOTE**: ⏳ `pip install` may take some time, depending on your internet connection. In case installation fails with error ``unsupported instruction `vpdpbusd'``, append `-C cmake.args="-DLLAMA_NATIVE=off"` to `pip install` command.
+
+   See [the GPU acceleration documentation](./docs/gpu-acceleration.md) for how to
+   to enable hardware acceleration for interaction and training on AMD ROCm,
+   Apple Metal Performance Shaders (MPS), and Nvidia CUDA.
+
+   #### Install using PyTorch without CUDA bindings and no GPU acceleration
+
+      ```shell
+      python3 -m venv --upgrade-deps venv
+      source venv/bin/activate
+      (venv) $ pip cache remove llama_cpp_python
+      (venv) $ pip install instructlab --extra-index-url=https://download.pytorch.org/whl/cpu
+      ```
+
+      > **NOTE**: *Additional Build Argument for Intel Macs*
+      >
+      > If you have an Mac with an Intel CPU, you must add a prefix of
+      > `CMAKE_ARGS="-DLLAMA_METAL=off"` to the `pip install` command to ensure
+      > that the build is done without Apple M-series GPU support.
+      >
+      > `(venv) $ CMAKE_ARGS="-DLLAMA_METAL=off" pip install ...`
+
+   #### Install with AMD ROCm
+
+      ```shell
+      python3 -m venv --upgrade-deps venv
+      source venv/bin/activate
+      (venv) $ pip cache remove llama_cpp_python
+      (venv) $ pip install instructlab \
+         --extra-index-url https://download.pytorch.org/whl/rocm6.0 \
+         -C cmake.args="-DLLAMA_HIPBLAS=on" \
+         -C cmake.args="-DAMDGPU_TARGETS=all" \
+         -C cmake.args="-DCMAKE_C_COMPILER=/opt/rocm/llvm/bin/clang" \
+         -C cmake.args="-DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++" \
+         -C cmake.args="-DCMAKE_PREFIX_PATH=/opt/rocm"
+      ```
+
+      On Fedora 40+, use `-DCMAKE_C_COMPILER=clang-17` and `-DCMAKE_CXX_COMPILER=clang++-17`.
+
+   #### Install with Apple Metal on M1/M2/M3 Macs
+
+      ```shell
+      python3 -m venv --upgrade-deps venv
+      source venv/bin/activate
+      (venv) $ pip cache remove llama_cpp_python
+      (venv) $ pip install instructlab
+      ```
+
+   #### Install with Nvidia CUDA
+
+      ```shell
+      python3 -m venv --upgrade-deps venv
+      source venv/bin/activate
+      (venv) $ pip cache remove llama_cpp_python
+      (venv) $ pip install instructlab -C cmake.args="-DLLAMA_CUBLAS=on"
    ```
-
-   > **NOTE**: ⏳ `pip install` may take some time, depending on your internet connection.
 
 4. From your `venv` environment, verify `ilab` is installed correctly, by running the `ilab` command.
 
@@ -107,7 +179,7 @@ The full process is described graphically in the [workflow diagram](./docs/workf
    ilab
    ```
 
-   #### Example output
+   *Example output of the `ilab` command*
 
    ```shell
    (venv) $ ilab
@@ -142,6 +214,55 @@ The full process is described graphically in the [workflow diagram](./docs/workf
    source venv/bin/activate
    ```
 
+5. Optional: You can enable tab completion for the `ilab` command.
+
+   #### Bash (version 4.4 or newer)
+
+   Enable tab completion in `bash` with the following command:
+
+   ```sh
+   eval "$(_ILAB_COMPLETE=bash_source ilab)"
+   ```
+
+   To have this enabled automatically every time you open a new shell,
+   you can save the completion script and source it from `~/.bashrc`:
+
+   ```sh
+   _ILAB_COMPLETE=bash_source ilab > ~/.ilab-complete.bash
+   echo ". ~/.ilab-complete.bash" >> ~/.bashrc
+   ```
+
+   #### Zsh
+
+   Enable tab completion in `zsh` with the following command:
+
+   ```sh
+   eval "$(_ILAB_COMPLETE=zsh_source ilab)"
+   ```
+
+   To have this enabled automatically every time you open a new shell,
+   you can save the completion script and source it from `~/.zshrc`:
+
+   ```sh
+   _ILAB_COMPLETE=zsh_source ilab > ~/.ilab-complete.zsh
+   echo ". ~/.ilab-complete.zsh" >> ~/.zshrc
+   ```
+
+   #### Fish
+
+   Enable tab completion in `fish` with the following command:
+
+   ```sh
+   _ILAB_COMPLETE=fish_source ilab | source
+   ```
+
+   To have this enabled automatically every time you open a new shell,
+   you can save the completion script and source it from `~/.bashrc`:
+
+   ```sh
+   _ILAB_COMPLETE=fish_source ilab > ~/.config/fish/completions/ilab.fish
+   ```
+
 ### 🏗️ Initialize `ilab`
 
 1. Initialize `ilab` by running the following command:
@@ -150,7 +271,7 @@ The full process is described graphically in the [workflow diagram](./docs/workf
    ilab init
    ```
 
-   #### Example output
+   *Example output*
 
    ```shell
    Welcome to InstructLab CLI. This guide will help you set up your environment.
@@ -164,7 +285,7 @@ The full process is described graphically in the [workflow diagram](./docs/workf
 
    **Optional**: If you want to point to an existing local clone of the `taxonomy` repository, you can pass the path interactively or alternatively with the `--taxonomy-path` flag.
 
-   #### Example output
+   *Example output after initializing `ilab`*
 
    ```shell
    (venv) $ ilab init
@@ -174,7 +295,7 @@ The full process is described graphically in the [workflow diagram](./docs/workf
    `taxonomy` seems to not exists or is empty. Should I clone https://github.com/instructlab/taxonomy.git for you? [y/N]: y
    Cloning https://github.com/instructlab/taxonomy.git...
    Generating `config.yaml` in the current directory...
-   Initialization completed successfully, you're ready to start using `lab`. Enjoy!
+   Initialization completed successfully, you're ready to start using `ilab`. Enjoy!
    ```
 
    `ilab` will use the default configuration file unless otherwise specified. You can override this behavior with the `--config` parameter for any `ilab` command.
@@ -191,13 +312,13 @@ The full process is described graphically in the [workflow diagram](./docs/workf
 
 ### 📥 Download the model
 
-- Run the `ilab download`command.
+- Run the `ilab download` command.
 
   ```shell
   ilab download
   ```
 
-  `ilab download` will download a pre-trained [model](https://huggingface.co/instructlab/) (~4.4G) from HuggingFace and store it in a `models` directory:
+  `ilab download` downloads a compact pre-trained version of the [model](https://huggingface.co/instructlab/) (~4.4G) from HuggingFace and store it in a `models` directory:
 
   ```shell
   (venv) $ ilab download
@@ -258,7 +379,7 @@ Before you start adding new skills and knowledge to your model, you can check it
 
 ### 🎁 Contribute knowledge or compositional skills
 
-Contribute new knowledge or compositional skills to your local [taxonomy](https://github.com/instructlab/taxonomy.git) repository.
+1. Contribute new knowledge or compositional skills to your local [taxonomy](https://github.com/instructlab/taxonomy.git) repository.
 
 Detailed contribution instructions can be found in the [taxonomy repository](https://github.com/instructlab/taxonomy/blob/main/README.md).
 
@@ -283,6 +404,8 @@ Detailed contribution instructions can be found in the [taxonomy repository](htt
 
 ### 🚀 Generate a synthetic dataset
 
+Before following these instructions, ensure the existing model you are adding skills or knowledge to is still running.
+
 1. To generate a synthetic dataset based on your newly added knowledge or skill set in [taxonomy](https://github.com/instructlab/taxonomy.git) repository, run the following command:
 
    ```shell
@@ -291,7 +414,7 @@ Detailed contribution instructions can be found in the [taxonomy repository](htt
 
    > **NOTE:** ⏳ This can take from 15 minutes to 1+ hours to complete, depending on your computing resources.
 
-   #### Example output
+   *Example output of `ilab generate`*
 
    ```shell
    (venv) $ ilab generate
@@ -324,11 +447,11 @@ Detailed contribution instructions can be found in the [taxonomy repository](htt
    ilab generate --endpoint-url http://localhost:8000/v1
    ```
 
-### 👩‍🏫 Train the model
+### 👩‍🏫 Training the model
 
-There are three options to train the model on your synthetic data-enhanced dataset.
+There are many options for training the model with your synthetic data-enhanced dataset.
 
-> **Note:** **Every** `ilab` command needs to be run from within your Python virtual environment.
+> **Note:** **Every** `ilab` command needs to run from within your Python virtual environment.
 
 #### Train the model locally on Linux
 
@@ -336,7 +459,7 @@ There are three options to train the model on your synthetic data-enhanced datas
 ilab train
 ```
 
-> **NOTE:** ⏳ This step can potentially take **several hours** to complete depending on your computing resources.
+> **NOTE:** ⏳ This step can potentially take **several hours** to complete depending on your computing resources. Please stop `ilab chat` and `ilab serve` first to free resources.
 
 `ilab train` outputs a brand-new model that can be served in the `models` directory called `ggml-model-f16.gguf`.
 
@@ -344,10 +467,6 @@ ilab train
  (venv) $ ls models
  ggml-merlinite-7b-lab-Q4_K_M.gguf  ggml-model-f16.gguf
 ```
-
-> **NOTE:** `ilab train` ships with experimental support for GPU acceleration with Nvidia CUDA
-or AMD ROCm. See [the GPU acceleration documentation](./docs/gpu-acceleration.md) for more
-details.
 
 #### Train the model locally on an M-series Mac
 
@@ -370,7 +489,15 @@ adapters-030.npz        adapters-070.npz        adapters.npz            special_
 adapters-040.npz        adapters-080.npz        added_tokens.json       tokenizer.jso
 ```
 
-#### Training the model in the cloud
+#### Train the model locally with GPU acceleration
+
+Training has experimental support for GPU acceleration with Nvidia CUDA or AMD ROCm. Please see [the GPU acceleration documentation](./docs/gpu-acceleration.md) for more details. At present, hardware acceleration requires a data center GPU or high-end consumer GPU with at least 18 GB free memory.
+
+```shell
+ilab train --device=cuda
+```
+
+#### Train the model in the cloud
 
 Follow the instructions in [Training](./notebooks/README.md).
 
@@ -410,16 +537,16 @@ The model can also be downloaded and served locally.
    ilab convert
    ```
 
-3. Serve the newly trained model locally via `ilab serve` command with the `--model`
+3. Serve the newly trained model locally via `ilab serve` command with the `--model-path`
 argument to specify your new model:
 
    ```shell
-   ilab serve --model-path <New model name>
+   ilab serve --model-path <new model path>
    ```
 
-   Which model should you select to serve? After running the `ilab convert` command, a few files and directories are generated. The one you will want to serve will end in `.gguf`
-   and will exist in a directory with the suffix `fused-pt`. For example:
-   `instructlab-merlinite-7b-lab-mlx-q-fused-pt/ggml-model-Q4_K_M.gguf`
+   Which model should you select to serve? After running the `ilab convert` command, some files and a directory are generated. The model you will want to serve ends with an extension of `.gguf`
+   and exists in a directory with the suffix `trained`. For example:
+   `instructlab-merlinite-7b-lab-trained/instructlab-merlinite-7b-lab-Q4_K_M.gguf`.
 
 ## 📣 Chat with the new model (not optional this time)
 
