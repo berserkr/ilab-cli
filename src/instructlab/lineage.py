@@ -396,7 +396,7 @@ class ModelTraining(Lineage):
 
         # push to dmf via lineage APIs
         required_keys = ["lineage_id", "event_type", "trained_model", "trained_model_files"]
-        if self.jutil.parse_events_json(self.to_json()) and self.post_model_train_jobstats(required_keys):
+        if self.jutil.parse_events_json(self.to_json()) and self.jutil.post_model_train_jobstats(required_keys):
             logger.info(f'DMF lineage saved successfully!')
         else:
             logger.warning(f'Could not save DMF lineage. JSON obj : {self.to_json()}')
