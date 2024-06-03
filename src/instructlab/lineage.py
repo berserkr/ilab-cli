@@ -367,7 +367,6 @@ class ModelTraining(Lineage):
         self.statistics = statistics
         self.trained_model = trained_model
         self.trained_model_files = trained_model_files
-
         self.time_stamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         
     def to_json(self):
@@ -382,6 +381,7 @@ class ModelTraining(Lineage):
         json_data['statistics'] = self.statistics
         json_data['trained_model'] = self.trained_model
         json_data['trained_model_files'] = self.trained_model_files
+        json_data['time_stamp'] = self.time_stamp
 
         return json_data
 
