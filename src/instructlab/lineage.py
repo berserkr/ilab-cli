@@ -194,8 +194,8 @@ class JobStatsUtil:
                         name='ilab-model-train-job',
                         type='ilab',
                         category='finetuning',
-                        started_at=self.generate_data["time_stamp"],  # train_model does not have any time stamp
-                        completed_at=self.generate_data["time_stamp"],
+                        started_at=self.model_train["time_stamp"],  # train_model does not have any time stamp
+                        completed_at=self.model_train["time_stamp"],
                         status='success',
                         owner='iLab'  # OPT
                     ),
@@ -395,7 +395,7 @@ class ModelTraining(Lineage):
                 json.dump(self.to_json(), f)
 
         # push to dmf via lineage APIs
-        required_keys = ["lineage_id", "event_type", "trained_model", "trained_model_files"]
+        required_keys = ["lineage_id", "event_type", "time_stamp", "trained_model", "trained_model_files"]
         if self.jutil.parse_events_json(self.to_json()) and self.jutil.post_model_train_jobstats(required_keys):
             logger.info(f'DMF lineage saved successfully!')
         else:
